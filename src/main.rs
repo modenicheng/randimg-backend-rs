@@ -1,11 +1,10 @@
 use apalis::layers::retry::RetryPolicy;
 use apalis::prelude::*;
-use apalis_sqlite::SqliteStorage;
 use axum::Router;
 use randimg_backend_rs::config::{AppConfig, BindAddr};
-use randimg_backend_rs::task_queue::handlers::{JobStorage, *};
+use randimg_backend_rs::task_queue::handlers::*;
 use randimg_backend_rs::task_queue::jobs::*;
-use randimg_backend_rs::{AppState, db, db::query, handlers};
+use randimg_backend_rs::{AppState, ApalisPool, db, db::query, db_backend, handlers};
 use std::sync::Arc;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
@@ -66,14 +65,9 @@ async fn main() {
     let oss = randimg_backend_rs::dogecloud::DogeCloudOss::new(&config);
 
     // --- Apalis job queue setup ------------------------------------------------
-    let apalis_pool = apalis_sqlite::SqlitePool::connect(&config.database_url)
+    let (apalis_pool, job_storage) = db_backend::init(&config.database_url)
         .await
-        .expect("Failed to connect Apalis SQLite pool");
-    SqliteStorage::<(), (), ()>::setup(&apalis_pool)
-        .await
-        .expect("Failed to run Apalis migrations");
-
-    let job_storage = JobStorage::new(&apalis_pool);
+        .expect("Failed to initialize Apalis job queue");
 
     let state = Arc::new(AppState {
         db,
@@ -220,7 +214,7 @@ async fn shutdown_signal() {
 /// Spawn Apalis workers for all job types. Returns handles for graceful shutdown.
 fn spawn_workers(
     state: Arc<AppState>,
-    _pool: &apalis_sqlite::SqlitePool,
+    _pool: &ApalisPool,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let js = &state.job_storage;
 
