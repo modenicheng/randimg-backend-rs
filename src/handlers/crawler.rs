@@ -149,18 +149,16 @@ pub async fn get_crawler_image(
 
     match task {
         Some(t) => {
-            if let Some(image_id) = t.payload["image_id"].as_i64() {
-                query::image::update_fields(
-                    &state.db,
-                    image_id as i32,
-                    serde_json::json!({ "processing": true }),
-                )
-                .await
-                .map_err(AppError::from)?;
-            }
+            // Use image_id from task field or payload
+            let image_id = t.image_id
+                .or_else(|| t.payload["image_id"].as_i64().map(|v| v as i32));
+            let image_path = t.image_path
+                .as_deref()
+                .or_else(|| t.payload["image_path"].as_str());
+
             Ok(Json(serde_json::json!({
-                "id": t.payload["image_id"],
-                "image_path": t.payload["image_path"],
+                "id": image_id,
+                "image_path": image_path,
                 "task_id": t.id,
             })))
         }
@@ -174,7 +172,6 @@ pub async fn get_crawler_image(
 pub struct ErrorCrawlerImageRequest {
     pub task_id: Option<String>,
     pub id: Option<i64>,
-    pub processing: Option<bool>,
 }
 
 /// POST /crawler/image  Error callback
@@ -189,16 +186,6 @@ pub async fn error_crawler_image(
             .map_err(AppError::from)?;
     }
 
-    if let Some(image_id) = body.id {
-        query::image::update_fields(
-            &state.db,
-            image_id as i32,
-            serde_json::json!({ "processing": body.processing.unwrap_or(false) }),
-        )
-        .await
-        .map_err(AppError::from)?;
-    }
-
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
@@ -211,7 +198,7 @@ pub async fn get_adjust_accessible(
     if query.init.unwrap_or(false) {
         use sea_orm::*;
         let images = Image::find()
-            .filter(image::Column::Downloaded.eq(true))
+            .filter(image::Column::IsPublic.eq(true))
             .filter(image::Column::Accessable.is_null())
             .all(&state.db)
             .await
@@ -243,11 +230,19 @@ pub async fn get_adjust_accessible(
         .map_err(AppError::from)?;
 
     match task {
-        Some(t) => Ok(Json(serde_json::json!({
-            "id": t.payload["image_id"],
-            "image_path": t.payload["image_path"],
-            "task_id": t.id,
-        }))),
+        Some(t) => {
+            let image_id = t.image_id
+                .or_else(|| t.payload["image_id"].as_i64().map(|v| v as i32));
+            let image_path = t.image_path
+                .as_deref()
+                .or_else(|| t.payload["image_path"].as_str());
+
+            Ok(Json(serde_json::json!({
+                "id": image_id,
+                "image_path": image_path,
+                "task_id": t.id,
+            })))
+        },
         None => Err(AppError::NotFound("Queue empty".into())),
     }
 }

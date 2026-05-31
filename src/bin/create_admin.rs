@@ -1,10 +1,20 @@
 use migration::MigratorTrait;
 use randimg_backend_rs::{auth, config::AppConfig, db};
 use std::io::{self, Write};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
+
+    // CLI 工具也使用 tracing，输出到 stderr，不影响交互式 stdin/stdout
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
 
     let config = AppConfig::from_env();
 
@@ -34,5 +44,5 @@ async fn main() {
         .await
         .expect("Failed to create admin");
 
-    println!("Created admin: {} (id={})", admin.username, admin.id);
+    tracing::info!(username = %admin.username, admin_id = admin.id, "Admin created");
 }

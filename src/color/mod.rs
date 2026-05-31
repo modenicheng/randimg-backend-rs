@@ -6,9 +6,17 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 #[derive(Serialize)]
+pub struct ColorEntry {
+    pub rgb: [u8; 3],
+    pub lab: [f64; 3],
+}
+
+#[derive(Serialize)]
 pub struct ThemeColors {
     pub primary_color: [u8; 3],
+    pub primary_lab: [f64; 3],
     pub colors: Vec<[u8; 3]>,
+    pub colors_lab: Vec<[f64; 3]>,
 }
 
 /// Quantize a channel value into bins (e.g., 16 levels)
@@ -94,7 +102,7 @@ static SRGB_TO_LINEAR: LazyLock<[f64; 256]> = LazyLock::new(srgb_to_linear_lut);
 static LINEAR_TO_SRGB: LazyLock<[f64; 4096]> = LazyLock::new(linear_to_srgb_lut);
 
 /// Convert sRGB [0,255] to CIELAB [L, a, b] using precomputed LUT.
-fn rgb_to_lab(r: u8, g: u8, b: u8) -> [f64; 3] {
+pub fn rgb_to_lab(r: u8, g: u8, b: u8) -> [f64; 3] {
     let r_lin = SRGB_TO_LINEAR[r as usize];
     let g_lin = SRGB_TO_LINEAR[g as usize];
     let b_lin = SRGB_TO_LINEAR[b as usize];
@@ -172,12 +180,15 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
     if pixels.is_empty() {
         return ThemeColors {
             primary_color: [0, 0, 0],
+            primary_lab: [0.0; 3],
             colors: vec![[0, 0, 0]; 10],
+            colors_lab: vec![[0.0; 3]; 10],
         };
     }
 
     // Primary color from histogram (16 levels per channel)
     let primary_color = histogram_primary_color(&pixels, 16);
+    let primary_lab = rgb_to_lab(primary_color[0], primary_color[1], primary_color[2]);
 
     // Convert to LAB for clustering (parallel)
     let lab_pixels: Vec<[f64; 3]> = pixels
@@ -192,7 +203,8 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
     let mut sorted_lab = lab_centroids;
     sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Convert LAB centroids back to RGB
+    // Keep LAB centroids for storage, also convert to RGB
+    let colors_lab: Vec<[f64; 3]> = sorted_lab.clone();
     let colors: Vec<[u8; 3]> = sorted_lab
         .into_iter()
         .map(|c| lab_to_rgb(c[0], c[1], c[2]))
@@ -200,6 +212,8 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
 
     ThemeColors {
         primary_color,
+        primary_lab,
         colors,
+        colors_lab,
     }
 }

@@ -10,6 +10,9 @@ pub struct AppConfig {
     pub server_addr: String,
     pub pixiv_refresh_token: String,
     pub pixiv_proxy: String,
+    pub log_level: String,
+    pub log_dir: String,
+    pub log_json: bool,
 }
 
 impl AppConfig {
@@ -40,6 +43,13 @@ impl AppConfig {
                 .unwrap_or_default(),
             pixiv_proxy: env::var("PIXIV_PROXY")
                 .unwrap_or_default(),
+            log_level: env::var("RUST_LOG")
+                .unwrap_or_else(|_| "randimg_backend_rs=info,tower_http=info".into()),
+            log_dir: env::var("LOG_DIR")
+                .unwrap_or_else(|_| "./logs".into()),
+            log_json: env::var("LOG_JSON")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
         }
     }
 }

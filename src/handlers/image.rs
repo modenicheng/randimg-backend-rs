@@ -23,6 +23,11 @@ pub struct RandomQuery {
     pub local: Option<bool>,
     pub ratio_floor: Option<f32>,
     pub ratio_ceil: Option<f32>,
+    pub width_floor: Option<i32>,
+    pub width_ceil: Option<i32>,
+    pub height_floor: Option<i32>,
+    pub height_ceil: Option<i32>,
+    pub author: Option<String>,
     pub tags: Option<String>,
 }
 
@@ -31,8 +36,13 @@ pub struct ListQuery {
     pub offset: Option<u64>,
     pub limit: Option<u64>,
     pub desc: Option<String>,
+    pub sort_by: Option<String>,
     pub ratio_floor: Option<f32>,
     pub ratio_ceil: Option<f32>,
+    pub width_floor: Option<i32>,
+    pub width_ceil: Option<i32>,
+    pub height_floor: Option<i32>,
+    pub height_ceil: Option<i32>,
     pub author: Option<String>,
     pub accessable: Option<String>,
     pub tags: Option<String>,
@@ -87,11 +97,20 @@ pub async fn random_image(
 ) -> Result<Response, AppError> {
     let ratio_floor = query.ratio_floor.unwrap_or(0.0);
     let ratio_ceil = query.ratio_ceil.unwrap_or(10.0);
+    let width_floor = query.width_floor.unwrap_or(0);
+    let width_ceil = query.width_ceil.unwrap_or(i32::MAX);
+    let height_floor = query.height_floor.unwrap_or(0);
+    let height_ceil = query.height_ceil.unwrap_or(i32::MAX);
 
     let img = image::random_image(
         &state.db,
         ratio_floor,
         ratio_ceil,
+        width_floor,
+        width_ceil,
+        height_floor,
+        height_ceil,
+        query.author.as_deref(),
         query.tags.as_deref(),
         &state.config,
     )
@@ -161,8 +180,13 @@ pub async fn list_images(
         offset,
         limit,
         desc,
+        query.sort_by.as_deref().unwrap_or("id"),
         query.ratio_floor.unwrap_or(0.0),
         query.ratio_ceil.unwrap_or(10.0),
+        query.width_floor.unwrap_or(0),
+        query.width_ceil.unwrap_or(i32::MAX),
+        query.height_floor.unwrap_or(0),
+        query.height_ceil.unwrap_or(i32::MAX),
         query.author.as_deref(),
         accessable,
         query.tags.as_deref(),
@@ -180,10 +204,8 @@ pub struct UpdateImageRequest {
     pub id: Option<i32>,
     pub title: Option<String>,
     pub accessable: Option<serde_json::Value>,
-    pub processed: Option<bool>,
-    pub processing: Option<bool>,
-    pub downloaded: Option<bool>,
-    pub uploaded: Option<bool>,
+    pub is_public: Option<bool>,
+    pub avatar_available: Option<bool>,
     pub colors: Option<serde_json::Value>,
 }
 
@@ -205,12 +227,69 @@ pub async fn patch_image(
         "id": updated.id,
         "title": updated.title,
         "accessable": updated.accessable,
-        "processed": updated.processed,
-        "processing": updated.processing,
+        "is_public": updated.is_public,
+        "avatar_available": updated.avatar_available,
     })))
 }
 
 /// DELETE /image/{image_id}
+
+#[derive(Deserialize)]
+pub struct ColorSearchQuery {
+    pub r: Option<u8>,
+    pub g: Option<u8>,
+    pub b: Option<u8>,
+    pub l: Option<f64>,
+    pub a: Option<f64>,
+    pub b_lab: Option<f64>,
+    pub mode: Option<String>,
+    pub max_dist: Option<f64>,
+    pub limit: Option<u64>,
+}
+
+/// GET /color/search  Search images by color similarity in LAB space
+///
+/// Accepts either RGB (r,g,b query params) or LAB (l,a,b_lab query params).
+/// mode: "primary" (default) or "palette"
+/// max_dist: optional squared distance cutoff
+/// limit: max results (default 20, max 100)
+pub async fn color_search(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ColorSearchQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    // Convert RGB to LAB if provided, otherwise use LAB directly
+    let lab = if let (Some(r), Some(g), Some(b)) = (query.r, query.g, query.b) {
+        crate::color::rgb_to_lab(r, g, b)
+    } else if let (Some(l), Some(a), Some(b_lab)) = (query.l, query.a, query.b_lab) {
+        [l, a, b_lab]
+    } else {
+        return Err(AppError::BadRequest(
+            "Provide either r,g,b or l,a,b_lab query parameters".into(),
+        ));
+    };
+
+    let mode = query.mode.as_deref().unwrap_or("primary");
+    if mode != "primary" && mode != "palette" {
+        return Err(AppError::BadRequest(
+            "mode must be 'primary' or 'palette'".into(),
+        ));
+    }
+
+    let limit = query.limit.unwrap_or(20).min(100);
+
+    let results = image::color_search(
+        &state.db,
+        lab,
+        mode,
+        query.max_dist,
+        limit,
+        &state.config,
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    Ok(Json(results))
+}
 pub async fn delete_image(
     State(state): State<Arc<AppState>>,
     Path(image_id): Path<i32>,
@@ -218,11 +297,19 @@ pub async fn delete_image(
 ) -> Result<Json<serde_json::Value>, AppError> {
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use crate::db::entities::image::Entity as ImageEntity;
-    use crate::db::entities::image_tag_association::{self, Entity as AssocEntity};
+    use crate::db::entities::image_tag_association::{self, Entity as TagAssocEntity};
+    use crate::db::entities::image_color_palette::{self, Entity as PaletteEntity};
 
-    // Delete tag associations first
-    AssocEntity::delete_many()
+    // Delete tag associations
+    TagAssocEntity::delete_many()
         .filter(image_tag_association::Column::ImageId.eq(image_id))
+        .exec(&state.db)
+        .await
+        .map_err(AppError::from)?;
+
+    // Delete color palette entries
+    PaletteEntity::delete_many()
+        .filter(image_color_palette::Column::ImageId.eq(image_id))
         .exec(&state.db)
         .await
         .map_err(AppError::from)?;

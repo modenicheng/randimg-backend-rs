@@ -1,19 +1,30 @@
 use std::sync::Arc;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 use crate::AppState;
 use super::{claim_next_task, complete_task, fail_task};
 use super::tasks;
 
-/// Start background task processing loops
-pub async fn start_runner(state: Arc<AppState>) {
-    let task_types = vec!["color_extract", "download", "upload", "crawl", "accessibility_check"];
+/// Start background task processing loops.
+/// Returns JoinHandles so the caller can abort them on shutdown.
+pub fn start_runner(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
+    let task_types = vec![
+        "color_extract",
+        "download",
+        "upload",
+        "crawl",
+        "accessibility_check",
+    ];
 
-    for task_type in task_types {
-        let state = state.clone();
-        tokio::spawn(async move {
-            tracing::info!("Starting task runner for: {}", task_type);
-            loop {
-                match claim_next_task(&state.db, task_type).await {
+    task_types
+        .into_iter()
+        .map(|task_type| {
+            let state = state.clone();
+            let name = task_type.to_owned();
+            tokio::spawn(async move {
+                tracing::info!(task_type = %name, "Task runner started");
+                loop {
+                    match claim_next_task(&state.db, task_type).await {
                     Ok(Some(task)) => {
                         tracing::info!("Processing task {}: {}", task.id, task.task_type);
                         let result = match task.task_type.as_str() {
@@ -48,6 +59,7 @@ pub async fn start_runner(state: Arc<AppState>) {
                     }
                 }
             }
-        });
-    }
+        })
+        })
+        .collect()
 }

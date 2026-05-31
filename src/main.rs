@@ -1,17 +1,70 @@
+use std::time::Instant;
+
 use axum::{routing::get, routing::post, Router};
 use randimg_backend_rs::{config::AppConfig, db, handlers, task_queue, AppState};
 use std::sync::Arc;
+use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
-use tracing_subscriber::EnvFilter;
+use tower_http::trace::TraceLayer;
+use tracing_appender::rolling;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+fn print_routes(routes: &[(&str, Vec<&str>)]) {
+    for (path, methods) in routes {
+        let label = methods.join(", ");
+        println!("│   {:<20} {}", label, path);
+    }
+}
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
     let config = AppConfig::from_env();
+
+    // --- Logging setup -------------------------------------------------------
+    let file_appender_guard = if config.log_json {
+        let file_appender = rolling::daily(&config.log_dir, "randimg.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        tracing_subscriber::registry()
+            .with(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new(&config.log_level)),
+            )
+            .with(tracing_subscriber::fmt::layer().json())
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(non_blocking)
+                    .json(),
+            )
+            .init();
+        guard
+    } else {
+        let file_appender = rolling::daily(&config.log_dir, "randimg.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        tracing_subscriber::registry()
+            .with(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new(&config.log_level)),
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_thread_ids(true)
+                    .with_target(true)
+                    .compact(),
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(non_blocking)
+                    .json(),
+            )
+            .init();
+        guard
+    };
+    let _appender_guard = file_appender_guard;
+
+    let start = Instant::now();
 
     let db = db::init_database(&config.database_url).await;
 
@@ -20,8 +73,8 @@ async fn main() {
         config: config.clone(),
     });
 
-    // Start background task runner
-    task_queue::runner::start_runner(state.clone()).await;
+    // --- Task runners --------------------------------------------------------
+    let runner_handles = task_queue::runner::start_runner(state.clone());
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -37,6 +90,7 @@ async fn main() {
                 .delete(handlers::image::delete_image),
         )
         .route("/list", get(handlers::image::list_images))
+        .route("/color/search", get(handlers::image::color_search))
         .route("/tags", get(handlers::tag::get_tags))
         .route("/statistic", get(handlers::statistic::get_statistic))
         .route("/token", post(handlers::auth::login))
@@ -51,12 +105,99 @@ async fn main() {
         )
         .route("/adjust-accessible", get(handlers::crawler::get_adjust_accessible))
         .nest_service("/images", ServeDir::new(&config.image_dir))
+        .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&config.server_addr)
         .await
         .unwrap();
-    tracing::info!("Listening on {}", config.server_addr);
-    axum::serve(listener, app).await.unwrap();
+    let local_addr = listener.local_addr().unwrap();
+    let elapsed = start.elapsed();
+
+    // === FastAPI-style startup banner =========================================
+    println!();
+    println!("  ╔═══════════════════════════════════════════════════════════════╗");
+    println!("  ║                  🖼️  randimg-backend-rs                      ║");
+    println!("  ╠═══════════════════════════════════════════════════════════════╣");
+    println!("  ║  Status   : READY                                           ║");
+    println!("  ║  Address  : http://{:<39} ║", local_addr);
+    println!("  ║  Database : {:<52}║", &config.database_url);
+    println!("  ║  Log Dir  : {:<52}║", &config.log_dir);
+    println!("  ║  Startup  : {:.3}s                                            ║", elapsed.as_secs_f64());
+    println!("  ╠═══════════════════════════════════════════════════════════════╣");
+    println!("  ║  Routes                                                       ║");
+    println!("  ├───────────────────────────────────────────────────────────────┤");
+    print_routes(&[
+        ("/", vec!["GET"]),
+        ("/image/{image_id}", vec!["GET", "PATCH", "DELETE"]),
+        ("/list", vec!["GET"]),
+        ("/color/search", vec!["GET"]),
+        ("/tags", vec!["GET"]),
+        ("/statistic", vec!["GET"]),
+        ("/token", vec!["POST"]),
+        ("/crawler", vec!["GET", "POST"]),
+        ("/crawler/image", vec!["GET", "POST"]),
+        ("/adjust-accessible", vec!["GET"]),
+        ("/images/*", vec!["Static"]),
+    ]);
+    println!("  ╠═══════════════════════════════════════════════════════════════╣");
+    println!("  ║  Press CTRL+C to stop the server                             ║");
+    println!("  ╚═══════════════════════════════════════════════════════════════╝");
+    println!();
+
+    tracing::info!(
+        address = %local_addr,
+        database = %config.database_url,
+        log_dir = %config.log_dir,
+        startup_secs = %format!("{:.3}", elapsed.as_secs_f64()),
+        "Server started"
+    );
+
+    // --- Graceful shutdown on CTRL+C =========================================
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
+
+    println!();
+    println!("  ⏹  Shutting down…");
+
+    tracing::info!("Shutting down — aborting background task runners…");
+    for h in &runner_handles {
+        h.abort();
+    }
+    // 等待所有 runner 结束（最多 2 秒，避免卡死）
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        for h in runner_handles {
+            let _ = h.await;
+        }
+    })
+    .await;
+
+    // DatabaseConnection drop 时会自动关闭连接池
+    tracing::info!("Shutdown complete");
+    println!("  ✅  Server stopped cleanly. Goodbye 👋");
+    println!();
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = signal::ctrl_c();
+    let sigterm = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("Received SIGINT (CTRL+C)");
+            println!("\n  ⏹  CTRL+C received — initiating graceful shutdown…");
+        }
+        _ = sigterm => {
+            tracing::info!("Received SIGTERM");
+            println!("\n  ⏹  SIGTERM received — initiating graceful shutdown…");
+        }
+    }
 }

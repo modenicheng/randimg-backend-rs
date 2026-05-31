@@ -12,10 +12,22 @@ pub async fn submit_task(
     payload: serde_json::Value,
     priority: i32,
 ) -> Result<task::Model, DbErr> {
+    // Extract image_id / image_path from payload for top-level indexing
+    let image_id = payload
+        .get("image_id")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
+    let image_path = payload
+        .get("image_path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     let model = task::ActiveModel {
         id: Set(uuid::Uuid::new_v4().to_string()),
         task_type: Set(task_type.to_string()),
         payload: Set(payload),
+        image_id: Set(image_id),
+        image_path: Set(image_path),
         status: Set("pending".to_string()),
         priority: Set(priority),
         retry_count: Set(0),

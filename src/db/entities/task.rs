@@ -10,6 +10,8 @@ pub struct Model {
     pub id: String,
     pub task_type: String,
     pub payload: JsonValue,
+    pub image_id: Option<i32>,
+    pub image_path: Option<String>,
     pub status: String,
     pub priority: i32,
     pub retry_count: i32,

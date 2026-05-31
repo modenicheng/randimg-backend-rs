@@ -26,11 +26,12 @@ fn main() {
         if i == 0 {
             println!("\n=== Extraction Result (run 1) ===");
             println!("  primary_color: RGB({},{},{})", result.primary_color[0], result.primary_color[1], result.primary_color[2]);
+            println!("  primary_lab:   L*{:.1} a*{:.1} b*{:.1}", result.primary_lab[0], result.primary_lab[1], result.primary_lab[2]);
             println!("  palette ({} colors, sorted by L*):", result.colors.len());
-            for (j, c) in result.colors.iter().enumerate() {
-                let hex = format!("{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
-                let brightness = (c[0] as u32 * 299 + c[1] as u32 * 587 + c[2] as u32 * 114) / 1000;
-                println!("    [{:2}] #{} RGB({:3},{:3},{:3}) brightness={}", j, hex, c[0], c[1], c[2], brightness);
+            for (j, (rgb, lab)) in result.colors.iter().zip(result.colors_lab.iter()).enumerate() {
+                let hex = format!("{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                let brightness = (rgb[0] as u32 * 299 + rgb[1] as u32 * 587 + rgb[2] as u32 * 114) / 1000;
+                println!("    [{:2}] #{} RGB({:3},{:3},{:3}) L*{:5.1} a*{:6.1} b*{:6.1} brightness={}", j, hex, rgb[0], rgb[1], rgb[2], lab[0], lab[1], lab[2], brightness);
             }
         }
     }

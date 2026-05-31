@@ -199,6 +199,11 @@ async fn save_illust(state: &AppState, illust: &Illust) -> Result<(), String> {
             "width": width,
             "height": height,
             "aspect_ratio": aspect_ratio,
+            "source_created_at": illust.create_date
+                .map(|d| d.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()),
+            "total_view": illust.total_view.unwrap_or(0),
+            "total_bookmarks": illust.total_bookmarks.unwrap_or(0),
+            "total_comments": illust.total_comments.unwrap_or(0),
         });
 
         let image = query::image::create_image(db, &image_data)

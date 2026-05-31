@@ -1,9 +1,30 @@
 use sea_orm::*;
 use crate::db::entities::{
     image::{self, Entity as Image},
-    author, tag,
+    author, tag, image_color_palette,
 };
 use crate::config::AppConfig;
+
+/// Calculate popularity score from image fields.
+/// score = (V + B*3 + C*2) / (T_crawl_age_hours + 2)^1.8
+/// T_crawl_age = created_at - source_created_at (hours)
+/// If source_created_at is None, T defaults to 168 (1 week).
+fn popularity_score(img: &image::Model) -> f64 {
+    let v = img.total_view as f64;
+    let b = img.total_bookmarks as f64;
+    let c = img.total_comments as f64;
+    let numerator = v + b * 3.0 + c * 2.0;
+
+    let t_hours = match img.source_created_at {
+        Some(src) => {
+            let diff = img.created_at.signed_duration_since(src);
+            diff.num_hours().max(0) as f64
+        }
+        None => 168.0, // default 1 week
+    };
+
+    numerator / (t_hours + 2.0).powf(1.8)
+}
 
 /// Get single image detail with author + tags
 pub async fn find_by_id(
@@ -47,6 +68,32 @@ pub async fn find_by_id(
         })
         .collect();
 
+    // Query color palette
+    let palette: Vec<image_color_palette::Model> = img
+        .find_related(image_color_palette::Entity)
+        .order_by_asc(image_color_palette::Column::ColorIndex)
+        .all(db)
+        .await?;
+
+    let palette_json: Vec<serde_json::Value> = palette
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "rgb": [p.rgb_r, p.rgb_g, p.rgb_b],
+                "lab": [p.lab_l, p.lab_a, p.lab_b],
+            })
+        })
+        .collect();
+
+    let primary_color = if img.primary_l.is_some() {
+        Some(serde_json::json!({
+            "rgb": img.colors.as_ref().and_then(|c| c.get("primary_color")).cloned(),
+            "lab": [img.primary_l, img.primary_a, img.primary_b],
+        }))
+    } else {
+        img.colors.as_ref().and_then(|c| c.get("primary_color")).cloned()
+    };
+
     Ok(Some(serde_json::json!({
         "id": img.id,
         "src": format!("{}{}", config.cdn_base_url, img.image_path),
@@ -57,7 +104,12 @@ pub async fn find_by_id(
         "source_url": img.source_url,
         "width": img.width,
         "height": img.height,
-        "colors": img.colors,
+        "primary_color": primary_color,
+        "colors": palette_json,
+        "source_created_at": img.source_created_at,
+        "total_view": img.total_view,
+        "total_bookmarks": img.total_bookmarks,
+        "total_comments": img.total_comments,
         "author": {
             "id": author.id,
             "name": author.name,
@@ -73,14 +125,33 @@ pub async fn random_image(
     db: &DatabaseConnection,
     ratio_floor: f32,
     ratio_ceil: f32,
+    width_floor: i32,
+    width_ceil: i32,
+    height_floor: i32,
+    height_ceil: i32,
+    author_filter: Option<&str>,
     tags: Option<&str>,
     config: &AppConfig,
 ) -> Result<Option<serde_json::Value>, DbErr> {
     let mut query = Image::find()
-        .filter(image::Column::Accessable.eq(true))
-        .filter(image::Column::Uploaded.eq(true))
+        .filter(image::Column::IsPublic.eq(true))
         .filter(image::Column::AspectRatio.gte(ratio_floor))
-        .filter(image::Column::AspectRatio.lte(ratio_ceil));
+        .filter(image::Column::AspectRatio.lte(ratio_ceil))
+        .filter(image::Column::Width.gte(width_floor))
+        .filter(image::Column::Width.lte(width_ceil))
+        .filter(image::Column::Height.gte(height_floor))
+        .filter(image::Column::Height.lte(height_ceil));
+
+    // author filter (join authors for name matching, but keep Select<Image> type)
+    if let Some(author_str) = author_filter {
+        if let Ok(author_id) = author_str.parse::<i32>() {
+            query = query.filter(image::Column::AuthorId.eq(author_id));
+        } else {
+            query = query
+                .join(JoinType::InnerJoin, image::Relation::Author.def())
+                .filter(author::Column::Name.like(format!("%{}%", author_str)));
+        }
+    }
 
     // If tags specified, join and filter
     if let Some(tag_str) = tags {
@@ -96,11 +167,10 @@ pub async fn random_image(
 
     // Use database-level random selection
     let img = query
-        .order_by_asc(image::Column::Id) // deterministic ordering for offset approach
+        .order_by_asc(image::Column::Id)
         .one(db)
         .await?;
 
-    // If we got an image, use it; otherwise return None
     let Some(img) = img else {
         return Ok(None);
     };
@@ -114,8 +184,13 @@ pub async fn list_images(
     offset: u64,
     limit: u64,
     desc: bool,
+    sort_by: &str,
     ratio_floor: f32,
     ratio_ceil: f32,
+    width_floor: i32,
+    width_ceil: i32,
+    height_floor: i32,
+    height_ceil: i32,
     author_filter: Option<&str>,
     accessable: Option<bool>,
     tags: Option<&str>,
@@ -124,14 +199,17 @@ pub async fn list_images(
 ) -> Result<Vec<serde_json::Value>, DbErr> {
     let mut query = Image::find()
         .find_also_related(author::Entity)
-        .filter(image::Column::Uploaded.eq(true))
-        .filter(image::Column::Processed.eq(true))
+        .filter(image::Column::IsPublic.eq(true))
         .filter(image::Column::AspectRatio.gte(ratio_floor))
-        .filter(image::Column::AspectRatio.lte(ratio_ceil));
+        .filter(image::Column::AspectRatio.lte(ratio_ceil))
+        .filter(image::Column::Width.gte(width_floor))
+        .filter(image::Column::Width.lte(width_ceil))
+        .filter(image::Column::Height.gte(height_floor))
+        .filter(image::Column::Height.lte(height_ceil));
 
-    // accessable filter
+    // accessable filter (admin can override)
     if !is_admin {
-        query = query.filter(image::Column::Accessable.eq(true));
+        query = query.filter(image::Column::Accessable.ne(Some(false)));
     } else if let Some(acc) = accessable {
         query = query.filter(image::Column::Accessable.eq(acc));
     }
@@ -157,16 +235,48 @@ pub async fn list_images(
             );
     }
 
-    // Sort
-    if desc {
-        query = query.order_by_desc(image::Column::Id);
-    } else {
-        query = query.order_by_asc(image::Column::Id);
+    // Popularity sort is handled at application level; others use DB ordering
+    let is_popularity = sort_by == "popularity";
+
+    if !is_popularity {
+        let sort_column = match sort_by {
+            "width" => image::Column::Width,
+            "height" => image::Column::Height,
+            "aspect_ratio" => image::Column::AspectRatio,
+            "source_created_at" => image::Column::SourceCreatedAt,
+            "created_at" => image::Column::CreatedAt,
+            _ => image::Column::Id,
+        };
+        if desc {
+            query = query.order_by_desc(sort_column);
+        } else {
+            query = query.order_by_asc(sort_column);
+        }
+        query = query.offset(offset).limit(limit);
     }
 
-    query = query.offset(offset).limit(limit);
-
     let results = query.all(db).await?;
+
+    // For popularity sort: compute scores in Rust, sort, then paginate
+    let results: Vec<_> = if is_popularity {
+        let mut scored: Vec<(f64, image::Model, Option<author::Model>)> = results
+            .into_iter()
+            .map(|(img, auth)| (popularity_score(&img), img, auth))
+            .collect();
+        if desc {
+            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        scored
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .map(|(_, img, auth)| (img, auth))
+            .collect()
+    } else {
+        results
+    };
 
     // Batch fetch tags for all images (avoid N+1)
     let image_ids: Vec<i32> = results.iter().map(|(img, _)| img.id).collect();
@@ -206,11 +316,14 @@ pub async fn list_images(
         let Some(auth) = auth else { continue };
         let tags_json = tags_by_image.remove(&img.id).unwrap_or_default();
 
-        let primary_color = img
-            .colors
-            .as_ref()
-            .and_then(|c| c.get("primary_color"))
-            .cloned();
+        let primary_color = if img.primary_l.is_some() {
+            Some(serde_json::json!({
+                "rgb": img.colors.as_ref().and_then(|c| c.get("primary_color")).cloned(),
+                "lab": [img.primary_l, img.primary_a, img.primary_b],
+            }))
+        } else {
+            img.colors.as_ref().and_then(|c| c.get("primary_color")).cloned()
+        };
 
         if is_admin {
             output.push(serde_json::json!({
@@ -219,8 +332,15 @@ pub async fn list_images(
                 "title": img.title,
                 "source_id": img.source_id,
                 "aspect_ratio": img.aspect_ratio,
+                "width": img.width,
+                "height": img.height,
                 "primary_color": primary_color,
                 "accessable": img.accessable,
+                "is_public": img.is_public,
+                "source_created_at": img.source_created_at,
+                "total_view": img.total_view,
+                "total_bookmarks": img.total_bookmarks,
+                "total_comments": img.total_comments,
                 "author": {
                     "id": auth.id,
                     "name": auth.name,
@@ -236,6 +356,8 @@ pub async fn list_images(
                 "title": img.title,
                 "source_id": img.source_id,
                 "aspect_ratio": img.aspect_ratio,
+                "width": img.width,
+                "height": img.height,
                 "primary_color": primary_color,
                 "author": auth.id,
                 "tags": tags_json,
@@ -246,13 +368,30 @@ pub async fn list_images(
     Ok(output)
 }
 
-/// Get unprocessed images
+/// Get unprocessed images (images with no completed color_extract task)
 pub async fn find_unprocessed(db: &DatabaseConnection) -> Result<Vec<image::Model>, DbErr> {
-    Image::find()
-        .filter(image::Column::Processed.eq(false))
-        .filter(image::Column::Processing.eq(false))
+    use crate::db::entities::task::{self, Entity as TaskEntity};
+
+    // Find image_ids that have a completed color_extract task
+    let completed_image_ids: Vec<i32> = TaskEntity::find()
+        .filter(task::Column::TaskType.eq("color_extract"))
+        .filter(task::Column::Status.eq("completed"))
         .all(db)
-        .await
+        .await?
+        .into_iter()
+        .filter_map(|t| t.image_id)
+        .collect();
+
+    // Find processed=true images that are NOT in completed list
+    let all_unprocessed = Image::find()
+        .filter(image::Column::IsPublic.eq(false))
+        .all(db)
+        .await?
+        .into_iter()
+        .filter(|img| !completed_image_ids.contains(&img.id))
+        .collect();
+
+    Ok(all_unprocessed)
 }
 
 /// Update image fields from JSON
@@ -276,17 +415,15 @@ pub async fn update_fields(
             active.accessable = Set(Some(b));
         }
     }
-    if let Some(processed) = data.get("processed").and_then(|v| v.as_bool()) {
-        active.processed = Set(processed);
+    if let Some(is_public) = data.get("is_public").and_then(|v| v.as_bool()) {
+        active.is_public = Set(is_public);
     }
-    if let Some(processing) = data.get("processing").and_then(|v| v.as_bool()) {
-        active.processing = Set(processing);
-    }
-    if let Some(downloaded) = data.get("downloaded").and_then(|v| v.as_bool()) {
-        active.downloaded = Set(downloaded);
-    }
-    if let Some(uploaded) = data.get("uploaded").and_then(|v| v.as_bool()) {
-        active.uploaded = Set(uploaded);
+    if let Some(avatar_available) = data.get("avatar_available") {
+        if avatar_available.is_null() {
+            active.avatar_available = Set(None);
+        } else if let Some(b) = avatar_available.as_bool() {
+            active.avatar_available = Set(Some(b));
+        }
     }
     if let Some(colors) = data.get("colors") {
         active.colors = Set(Some(colors.clone()));
@@ -309,6 +446,11 @@ pub async fn create_image(
     db: &DatabaseConnection,
     data: &serde_json::Value,
 ) -> Result<image::Model, DbErr> {
+    // Parse source_created_at from string if present (format: "YYYY-MM-DD HH:MM:SS")
+    let source_created_at = data["source_created_at"]
+        .as_str()
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok());
+
     let model = image::ActiveModel {
         title: Set(data["title"].as_str().unwrap_or("").to_string()),
         image_path: Set(data["image_path"].as_str().unwrap_or("").to_string()),
@@ -320,7 +462,160 @@ pub async fn create_image(
         height: Set(data["height"].as_i64().unwrap_or(0) as i32),
         aspect_ratio: Set(data["aspect_ratio"].as_f64().unwrap_or(0.0) as f32),
         colors: Set(data.get("colors").cloned()),
+        source_created_at: Set(source_created_at),
+        total_view: Set(data["total_view"].as_i64().unwrap_or(0)),
+        total_bookmarks: Set(data["total_bookmarks"].as_i64().unwrap_or(0)),
+        total_comments: Set(data["total_comments"].as_i64().unwrap_or(0)),
         ..Default::default()
     };
     model.insert(db).await
+}
+
+/// Search images by color similarity in LAB space.
+///
+/// - `lab`: target color as [L, a, b]
+/// - `mode`: "primary" (match primary color) or "palette" (match any palette color)
+/// - `max_dist`: maximum squared Euclidean distance in LAB space (optional cutoff)
+/// - `limit`: max results
+///
+/// Returns images sorted by ascending distance (most similar first).
+pub async fn color_search(
+    db: &DatabaseConnection,
+    lab: [f64; 3],
+    mode: &str,
+    max_dist: Option<f64>,
+    limit: u64,
+    config: &AppConfig,
+) -> Result<Vec<serde_json::Value>, DbErr> {
+    let target_l = lab[0];
+    let target_a = lab[1];
+    let target_b = lab[2];
+
+    // Bounding box pre-filter: sqrt(max_dist) gives max per-axis deviation
+    let box_radius = max_dist.map(|d| d.sqrt()).unwrap_or(100.0);
+
+    if mode == "primary" {
+        // Search by primary color (stored on images table)
+        // Pre-filter with bounding box, compute exact distance in Rust
+        let results = Image::find()
+            .filter(image::Column::IsPublic.eq(true))
+            .filter(image::Column::PrimaryL.is_not_null())
+            .filter(image::Column::PrimaryL.between(target_l - box_radius, target_l + box_radius))
+            .filter(image::Column::PrimaryA.between(target_a - box_radius, target_a + box_radius))
+            .filter(image::Column::PrimaryB.between(target_b - box_radius, target_b + box_radius))
+            .all(db)
+            .await?;
+
+        let mut scored: Vec<(f64, image::Model)> = results
+            .into_iter()
+            .filter_map(|img| {
+                let l = img.primary_l?;
+                let a = img.primary_a.unwrap_or(0.0);
+                let b = img.primary_b.unwrap_or(0.0);
+                let dist = (l - target_l).powi(2) + (a - target_a).powi(2) + (b - target_b).powi(2);
+                if max_dist.is_none() || dist <= max_dist.unwrap() {
+                    Some((dist, img))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit as usize);
+
+        let output = scored
+            .into_iter()
+            .map(|(dist, img)| {
+                serde_json::json!({
+                    "id": img.id,
+                    "src": format!("{}{}", config.cdn_base_url, img.image_path),
+                    "title": img.title,
+                    "aspect_ratio": img.aspect_ratio,
+                    "width": img.width,
+                    "height": img.height,
+                    "primary_color": {
+                        "rgb": img.colors.as_ref().and_then(|c| c.get("primary_color")).cloned(),
+                        "lab": [img.primary_l, img.primary_a, img.primary_b],
+                    },
+                    "distance": dist,
+                })
+            })
+            .collect();
+
+        Ok(output)
+    } else {
+        // Search by palette color (match the closest palette entry per image)
+        use crate::db::entities::image_color_palette::{self, Entity as PaletteEntity};
+
+        // Bounding box pre-filter on palette table
+        let palette_results = PaletteEntity::find()
+            .filter(image_color_palette::Column::LabL.between(target_l - box_radius, target_l + box_radius))
+            .filter(image_color_palette::Column::LabA.between(target_a - box_radius, target_a + box_radius))
+            .filter(image_color_palette::Column::LabB.between(target_b - box_radius, target_b + box_radius))
+            .all(db)
+            .await?;
+
+        // Group by image_id, keep min distance
+        let mut best_by_image: std::collections::HashMap<i32, (f64, &image_color_palette::Model)> =
+            std::collections::HashMap::new();
+        for p in &palette_results {
+            let dist = (p.lab_l - target_l).powi(2)
+                + (p.lab_a - target_a).powi(2)
+                + (p.lab_b - target_b).powi(2);
+            if max_dist.is_some() && dist > max_dist.unwrap() {
+                continue;
+            }
+            let entry = best_by_image.entry(p.image_id).or_insert((dist, p));
+            if dist < entry.0 {
+                *entry = (dist, p);
+            }
+        }
+
+        // Sort by distance and take limit
+        let mut sorted: Vec<(i32, f64, &image_color_palette::Model)> = best_by_image
+            .into_iter()
+            .map(|(img_id, (dist, p))| (img_id, dist, p))
+            .collect();
+        sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.truncate(limit as usize);
+
+        // Fetch corresponding images
+        let image_ids: Vec<i32> = sorted.iter().map(|(id, _, _)| *id).collect();
+        let images: Vec<image::Model> = if image_ids.is_empty() {
+            Vec::new()
+        } else {
+            Image::find()
+                .filter(image::Column::Id.is_in(image_ids))
+                .all(db)
+                .await?
+        };
+        let image_map: std::collections::HashMap<i32, &image::Model> =
+            images.iter().map(|i| (i.id, i)).collect();
+
+        let mut output = Vec::new();
+        for (img_id, dist, matched_color) in sorted {
+            if let Some(img) = image_map.get(&img_id) {
+                output.push(serde_json::json!({
+                    "id": img.id,
+                    "src": format!("{}{}", config.cdn_base_url, img.image_path),
+                    "title": img.title,
+                    "aspect_ratio": img.aspect_ratio,
+                    "width": img.width,
+                    "height": img.height,
+                    "primary_color": {
+                        "rgb": img.colors.as_ref().and_then(|c| c.get("primary_color")).cloned(),
+                        "lab": [img.primary_l, img.primary_a, img.primary_b],
+                    },
+                    "matched_color": {
+                        "rgb": [matched_color.rgb_r, matched_color.rgb_g, matched_color.rgb_b],
+                        "lab": [matched_color.lab_l, matched_color.lab_a, matched_color.lab_b],
+                    },
+                    "distance": dist,
+                }));
+            }
+        }
+
+        Ok(output)
+    }
 }

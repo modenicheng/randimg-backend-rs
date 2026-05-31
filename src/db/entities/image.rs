@@ -1,3 +1,4 @@
+use chrono::NaiveDateTime;
 use sea_orm::entity::prelude::*;
 use sea_orm::JsonValue;
 use serde::{Deserialize, Serialize};
@@ -17,11 +18,21 @@ pub struct Model {
     pub height: i32,
     pub aspect_ratio: f32,
     pub colors: Option<JsonValue>,
+    pub primary_l: Option<f64>,
+    pub primary_a: Option<f64>,
+    pub primary_b: Option<f64>,
     pub accessable: Option<bool>,
-    pub uploaded: bool,
-    pub downloaded: bool,
-    pub processed: bool,
-    pub processing: bool,
+    pub avatar_available: Option<bool>,
+    pub is_public: bool,
+    pub source_created_at: Option<NaiveDateTime>,
+    #[sea_orm(column_type = "BigInteger")]
+    pub total_view: i64,
+    #[sea_orm(column_type = "BigInteger")]
+    pub total_bookmarks: i64,
+    #[sea_orm(column_type = "BigInteger")]
+    pub total_comments: i64,
+    pub fetched_times: i32,
+    pub created_at: NaiveDateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -34,6 +45,8 @@ pub enum Relation {
     Author,
     #[sea_orm(has_many = "super::image_tag_association::Entity")]
     ImageTagAssociation,
+    #[sea_orm(has_many = "super::image_color_palette::Entity")]
+    ImageColorPalette,
 }
 
 impl Related<super::author::Entity> for Entity {
@@ -49,6 +62,12 @@ impl Related<super::tag::Entity> for Entity {
 
     fn via() -> Option<RelationDef> {
         Some(super::image_tag_association::Relation::Tag.def().rev())
+    }
+}
+
+impl Related<super::image_color_palette::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::ImageColorPalette.def()
     }
 }
 

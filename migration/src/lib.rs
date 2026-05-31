@@ -1,6 +1,8 @@
 pub use sea_orm_migration::prelude::*;
 
 mod m20260531_000001_create_base_tables;
+mod m20260531_000002_schema_refactor;
+mod m20260531_000003_color_palette;
 
 pub struct Migrator;
 
@@ -9,6 +11,8 @@ impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m20260531_000001_create_base_tables::Migration),
+            Box::new(m20260531_000002_schema_refactor::Migration),
+            Box::new(m20260531_000003_color_palette::Migration),
         ]
     }
 }

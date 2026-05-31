@@ -1,10 +1,9 @@
 use crate::AppState;
 use crate::db::entities::task;
-use sea_orm::*;
 
 pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
-    let image_id = task.payload["image_id"]
-        .as_i64()
+    let image_id = task.image_id
+        .or_else(|| task.payload["image_id"].as_i64().map(|v| v as i32))
         .ok_or("missing image_id")?;
 
     let source_image_url = task.payload["source_image_url"]
@@ -44,18 +43,6 @@ pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
     tokio::fs::write(&file_path, &bytes)
         .await
         .map_err(|e| format!("Failed to write file: {}", e))?;
-
-    // Update database: downloaded=true
-    use crate::db::entities::image::{self, Entity as Image};
-    if let Some(img_model) = Image::find_by_id(image_id as i32)
-        .one(&state.db)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        let mut active: image::ActiveModel = img_model.into();
-        active.downloaded = Set(true);
-        active.update(&state.db).await.map_err(|e| e.to_string())?;
-    }
 
     tracing::info!("Downloaded image {} to {}", image_id, file_path);
     Ok(())
