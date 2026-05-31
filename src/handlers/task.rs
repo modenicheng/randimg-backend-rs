@@ -52,14 +52,213 @@ fn unmap_status(status: &str) -> &str {
     }
 }
 
-/// Convert unix timestamp (seconds) to ISO-like string.
-fn ts_to_string(ts: Option<i64>) -> Option<String> {
-    ts.map(|t| {
-        chrono::DateTime::from_timestamp(t, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| t.to_string())
+// ---------------------------------------------------------------------------
+// SQL constants (feature-gated table name)
+// ---------------------------------------------------------------------------
+
+const SELECT_COLS: &str =
+    "id, job_type, status, attempts, max_attempts, run_at, done_at, last_result, priority";
+
+#[cfg(feature = "sqlite")]
+const JOBS_TABLE: &str = "Jobs";
+#[cfg(feature = "postgres")]
+const JOBS_TABLE: &str = "apalis.jobs";
+
+// ---------------------------------------------------------------------------
+// ApalisJobRow (feature-gated field types)
+// ---------------------------------------------------------------------------
+
+#[derive(sqlx::FromRow)]
+struct ApalisJobRow {
+    id: String,
+    job_type: String,
+    status: String,
+    attempts: i32,
+    max_attempts: i32,
+    #[cfg(feature = "sqlite")]
+    run_at: i64,
+    #[cfg(feature = "postgres")]
+    run_at: chrono::DateTime<chrono::Utc>,
+    #[cfg(feature = "sqlite")]
+    done_at: Option<i64>,
+    #[cfg(feature = "postgres")]
+    done_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[cfg(feature = "sqlite")]
+    last_result: Option<String>,
+    #[cfg(feature = "postgres")]
+    last_result: Option<serde_json::Value>,
+    priority: i32,
+}
+
+// ---------------------------------------------------------------------------
+// Timestamp / last_result formatting helpers (feature-gated)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "sqlite")]
+fn fmt_ts(ts: Option<i64>) -> Option<String> {
+    ts.and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+#[cfg(feature = "postgres")]
+fn fmt_ts(ts: Option<chrono::DateTime<chrono::Utc>>) -> Option<String> {
+    ts.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+#[cfg(feature = "sqlite")]
+fn fmt_ts_req(ts: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+#[cfg(feature = "postgres")]
+fn fmt_ts_req(ts: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    Some(ts.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+#[cfg(feature = "sqlite")]
+fn fmt_last_result(v: &Option<String>) -> Option<String> {
+    v.clone()
+}
+
+#[cfg(feature = "postgres")]
+fn fmt_last_result(v: &Option<serde_json::Value>) -> Option<String> {
+    v.as_ref().map(|v| v.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// fetch_tasks helper (feature-gated SQL parameter syntax)
+// ---------------------------------------------------------------------------
+
+async fn fetch_tasks(
+    pool: &crate::ApalisPool,
+    task_type: Option<&str>,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ApalisJobRow>, sqlx::Error> {
+    match (task_type, status) {
+        (Some(tt), Some(st)) => {
+            #[cfg(feature = "sqlite")]
+            {
+                sqlx::query_as::<_, ApalisJobRow>(&format!(
+                    "{SELECT_COLS} FROM {JOBS_TABLE} WHERE job_type = ?1 AND status = ?2 ORDER BY run_at DESC LIMIT ?3 OFFSET ?4"
+                ))
+                .bind(tt)
+                .bind(st)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await
+            }
+            #[cfg(feature = "postgres")]
+            {
+                sqlx::query_as::<_, ApalisJobRow>(&format!(
+                    "{SELECT_COLS} FROM {JOBS_TABLE} WHERE job_type = $1 AND status = $2 ORDER BY run_at DESC LIMIT $3 OFFSET $4"
+                ))
+                .bind(tt)
+                .bind(st)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await
+            }
+        }
+        (Some(tt), None) => {
+            #[cfg(feature = "sqlite")]
+            {
+                sqlx::query_as::<_, ApalisJobRow>(&format!(
+                    "{SELECT_COLS} FROM {JOBS_TABLE} WHERE job_type = ?1 ORDER BY run_at DESC LIMIT ?2 OFFSET ?3"
+                ))
+                .bind(tt)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await
+            }
+            #[cfg(feature = "postgres")]
+            {
+                sqlx::query_as::<_, ApalisJobRow>(&format!(
+                    "{SELECT_COLS} FROM {JOBS_TABLE} WHERE job_type = $1 ORDER BY run_at DESC LIMIT $2 OFFSET $3"
+                ))
+                .bind(tt)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await
+            }
+        }
+        (None, Some(st)) => {
+            #[cfg(feature = "sqlite")]
+            {
+                sqlx::query_as::<_, ApalisJobRow>(&format!(
+                    "{SELECT_COLS} FROM {JOBS_TABLE} WHERE status = ?1 ORDER BY run_at DESC LIMIT ?2 OFFSET ?3"
+                ))
+                .bind(st)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await
+            }
+            #[cfg(feature = "postgres")]
+            {
+                sqlx::query_as::<_, ApalisJobRow>(&format!(
+                    "{SELECT_COLS} FROM {JOBS_TABLE} WHERE status = $1 ORDER BY run_at DESC LIMIT $2 OFFSET $3"
+                ))
+                .bind(st)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await
+            }
+        }
+        (None, None) => {
+            #[cfg(feature = "sqlite")]
+            {
+                sqlx::query_as::<_, ApalisJobRow>(&format!(
+                    "{SELECT_COLS} FROM {JOBS_TABLE} ORDER BY run_at DESC LIMIT ?1 OFFSET ?2"
+                ))
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await
+            }
+            #[cfg(feature = "postgres")]
+            {
+                sqlx::query_as::<_, ApalisJobRow>(&format!(
+                    "{SELECT_COLS} FROM {JOBS_TABLE} ORDER BY run_at DESC LIMIT $1 OFFSET $2"
+                ))
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// row_to_json helper (no cfg needed — uses feature-gated fmt_* functions)
+// ---------------------------------------------------------------------------
+
+fn row_to_json(t: &ApalisJobRow) -> serde_json::Value {
+    serde_json::json!({
+        "id": t.id,
+        "task_type": t.job_type,
+        "status": map_status(&t.status),
+        "priority": t.priority,
+        "retry_count": t.attempts,
+        "max_retries": t.max_attempts,
+        "created_at": fmt_ts_req(t.run_at),
+        "started_at": serde_json::Value::Null,
+        "finished_at": fmt_ts(t.done_at),
+        "last_error": fmt_last_result(&t.last_result),
     })
 }
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
 
 /// GET /tasks — List background tasks with optional filters
 pub async fn list_tasks(
@@ -72,73 +271,19 @@ pub async fn list_tasks(
 
     let pool = &state.apalis_pool;
 
-    // Build query dynamically based on filters
-    let rows = match (&q.task_type, &q.status) {
-        (Some(tt), Some(st)) => {
-            sqlx::query_as::<_, ApalisJobRow>(
-                "SELECT id, job_type, status, attempts, max_attempts, run_at, done_at, last_result, priority
-                 FROM Jobs WHERE job_type = ?1 AND status = ?2 ORDER BY run_at DESC LIMIT ?3 OFFSET ?4"
-            )
-            .bind(tt)
-            .bind(unmap_status(st))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await
-        }
-        (Some(tt), None) => {
-            sqlx::query_as::<_, ApalisJobRow>(
-                "SELECT id, job_type, status, attempts, max_attempts, run_at, done_at, last_result, priority
-                 FROM Jobs WHERE job_type = ?1 ORDER BY run_at DESC LIMIT ?2 OFFSET ?3"
-            )
-            .bind(tt)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await
-        }
-        (None, Some(st)) => {
-            sqlx::query_as::<_, ApalisJobRow>(
-                "SELECT id, job_type, status, attempts, max_attempts, run_at, done_at, last_result, priority
-                 FROM Jobs WHERE status = ?1 ORDER BY run_at DESC LIMIT ?2 OFFSET ?3"
-            )
-            .bind(unmap_status(st))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await
-        }
-        (None, None) => {
-            sqlx::query_as::<_, ApalisJobRow>(
-                "SELECT id, job_type, status, attempts, max_attempts, run_at, done_at, last_result, priority
-                 FROM Jobs ORDER BY run_at DESC LIMIT ?1 OFFSET ?2"
-            )
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await
-        }
-    };
+    let mapped_status = q.status.as_deref().map(unmap_status);
 
-    let tasks = rows.map_err(|e| AppError::Internal(e.to_string()))?;
+    let rows = fetch_tasks(
+        pool,
+        q.task_type.as_deref(),
+        mapped_status.as_deref(),
+        limit,
+        offset,
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let result: Vec<serde_json::Value> = tasks
-        .iter()
-        .map(|t| {
-            serde_json::json!({
-                "id": t.id,
-                "task_type": t.job_type,
-                "status": map_status(&t.status),
-                "priority": t.priority,
-                "retry_count": t.attempts,
-                "max_retries": t.max_attempts,
-                "created_at": ts_to_string(Some(t.run_at)),
-                "started_at": serde_json::Value::Null,
-                "finished_at": ts_to_string(t.done_at),
-                "last_error": t.last_result,
-            })
-        })
-        .collect();
+    let result: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
     Ok(Json(result))
 }
@@ -151,42 +296,30 @@ pub async fn get_task(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let pool = &state.apalis_pool;
 
-    let row = sqlx::query_as::<_, ApalisJobRow>(
-        "SELECT id, job_type, status, attempts, max_attempts, run_at, done_at, last_result, priority
-         FROM Jobs WHERE id = ?1"
-    )
-    .bind(&task_id)
-    .fetch_optional(pool)
-    .await
+    let row = {
+        #[cfg(feature = "sqlite")]
+        {
+            sqlx::query_as::<_, ApalisJobRow>(&format!(
+                "{SELECT_COLS} FROM {JOBS_TABLE} WHERE id = ?1"
+            ))
+            .bind(&task_id)
+            .fetch_optional(pool)
+            .await
+        }
+        #[cfg(feature = "postgres")]
+        {
+            sqlx::query_as::<_, ApalisJobRow>(&format!(
+                "{SELECT_COLS} FROM {JOBS_TABLE} WHERE id = $1"
+            ))
+            .bind(&task_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     match row {
-        Some(t) => Ok(Json(serde_json::json!({
-            "id": t.id,
-            "task_type": t.job_type,
-            "status": map_status(&t.status),
-            "priority": t.priority,
-            "retry_count": t.attempts,
-            "max_retries": t.max_attempts,
-            "created_at": ts_to_string(Some(t.run_at)),
-            "started_at": serde_json::Value::Null,
-            "finished_at": ts_to_string(t.done_at),
-            "last_error": t.last_result,
-        }))),
+        Some(t) => Ok(Json(row_to_json(&t))),
         None => Err(AppError::NotFound(format!("Task {} not found", task_id))),
     }
-}
-
-/// Row type for querying the Apalis Jobs table.
-#[derive(sqlx::FromRow)]
-struct ApalisJobRow {
-    id: String,
-    job_type: String,
-    status: String,
-    attempts: i32,
-    max_attempts: i32,
-    run_at: i64,
-    done_at: Option<i64>,
-    last_result: Option<String>,
-    priority: i32,
 }
