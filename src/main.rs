@@ -94,6 +94,7 @@ async fn main() {
                 .post(handlers::crawler::error_crawler_image),
         )
         .route("/adjust-accessible", get(handlers::crawler::get_adjust_accessible))
+        .route("/crawler/discover", post(handlers::crawler::trigger_discover))
         .route("/tasks", get(handlers::task::list_tasks))
         .route(
             "/tasks/{task_id}",

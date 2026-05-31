@@ -189,6 +189,36 @@ pub async fn error_crawler_image(
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
+#[derive(Deserialize)]
+pub struct DiscoverRequest {
+    pub max_hops: Option<u32>,
+    pub seed_limit: Option<u64>,
+    pub seed_method: Option<String>,
+}
+
+/// POST /crawler/discover  Manually trigger a discover crawl
+pub async fn trigger_discover(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Json(body): Json<DiscoverRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let payload = serde_json::json!({
+        "hop": 0,
+        "max_hops": body.max_hops,
+        "seed_limit": body.seed_limit,
+        "seed_method": body.seed_method,
+    });
+
+    task_queue::submit_task(&state.db, "discover", payload, 0)
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": "Discover task submitted",
+    })))
+}
+
 /// GET /adjust-accessible  Get images for accessibility check
 pub async fn get_adjust_accessible(
     State(state): State<Arc<AppState>>,

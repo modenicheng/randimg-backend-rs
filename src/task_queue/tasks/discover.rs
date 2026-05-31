@@ -1,17 +1,27 @@
 use crate::AppState;
 use crate::db::entities::task;
 use crate::db::query;
+use crate::db::query::image::SeedMethod;
 use crate::task_queue;
 
 pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
     let hop = task.payload["hop"].as_i64().unwrap_or(0) as u32;
-    let max_hops = state.config.max_discover_hops;
-    let seed_limit = state.config.discover_seed_limit;
+    let max_hops = task.payload["max_hops"]
+        .as_u64()
+        .map(|v| v as u32)
+        .unwrap_or(state.config.max_discover_hops);
+    let seed_limit = task.payload["seed_limit"]
+        .as_u64()
+        .unwrap_or(state.config.discover_seed_limit);
+    let seed_method = task.payload["seed_method"]
+        .as_str()
+        .map(SeedMethod::from_str)
+        .unwrap_or_default();
 
-    tracing::info!(hop, max_hops, seed_limit, "Starting discover task");
+    tracing::info!(hop, max_hops, seed_limit, ?seed_method, "Starting discover task");
 
-    // 1. Select seed images by popularity
-    let seeds = query::image::find_discover_seeds(&state.db, seed_limit)
+    // 1. Select seed images by the chosen method
+    let seeds = query::image::find_discover_seeds(&state.db, seed_limit, seed_method)
         .await
         .map_err(|e| format!("Failed to find discover seeds: {}", e))?;
 
@@ -52,7 +62,12 @@ pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
         task_queue::submit_task(
             &state.db,
             "discover",
-            serde_json::json!({ "hop": hop + 1 }),
+            serde_json::json!({
+                "hop": hop + 1,
+                "max_hops": max_hops,
+                "seed_limit": seed_limit,
+                "seed_method": task.payload["seed_method"],
+            }),
             0,
         )
         .await

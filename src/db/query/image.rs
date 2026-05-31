@@ -433,31 +433,96 @@ pub async fn update_fields(
     Ok(Some(result))
 }
 
+/// Seed selection method for discover crawling.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum SeedMethod {
+    /// Time-decayed engagement score (views + 3×bookmarks + 2×comments)
+    #[default]
+    Popularity,
+    /// Sort by total_view descending
+    Views,
+    /// Sort by total_bookmarks descending
+    Bookmarks,
+    /// Random selection
+    Random,
+}
+
+impl SeedMethod {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "views" => Self::Views,
+            "bookmarks" => Self::Bookmarks,
+            "random" => Self::Random,
+            _ => Self::Popularity,
+        }
+    }
+}
+
 /// Find seed images for discover/next-hop crawling.
-/// Returns top `limit` images by popularity_score (time-decayed engagement).
+/// Returns top `limit` images ranked by the given `method`.
 pub async fn find_discover_seeds(
     db: &DatabaseConnection,
     limit: u64,
+    method: SeedMethod,
 ) -> Result<Vec<image::Model>, DbErr> {
-    // Fetch candidates ordered by raw engagement, then re-rank with popularity_score
-    let candidates = Image::find()
-        .filter(image::Column::SourceId.is_not_null())
-        .filter(image::Column::IsPublic.eq(true))
-        .order_by_desc(image::Column::TotalBookmarks)
-        .limit(limit * 3)
-        .all(db)
-        .await?;
+    let base_query = || {
+        Image::find()
+            .filter(image::Column::SourceId.is_not_null())
+            .filter(image::Column::IsPublic.eq(true))
+    };
 
-    let mut scored: Vec<(f64, image::Model)> = candidates
-        .into_iter()
-        .map(|img| (popularity_score(&img), img))
-        .collect();
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(scored
-        .into_iter()
-        .take(limit as usize)
-        .map(|(_, img)| img)
-        .collect())
+    match method {
+        SeedMethod::Views => {
+            Ok(base_query()
+                .order_by_desc(image::Column::TotalView)
+                .limit(limit)
+                .all(db)
+                .await?)
+        }
+        SeedMethod::Bookmarks => {
+            Ok(base_query()
+                .order_by_desc(image::Column::TotalBookmarks)
+                .limit(limit)
+                .all(db)
+                .await?)
+        }
+        SeedMethod::Random => {
+            // Fetch a larger pool then shuffle in Rust (SQLite RANDOM() not portable via SeaORM)
+            let pool = base_query().limit(limit * 5).all(db).await?;
+            let mut pool = pool;
+            // Fisher-Yates shuffle with a simple seed from timestamp
+            let len = pool.len();
+            if len <= limit as usize {
+                return Ok(pool);
+            }
+            let seed = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as usize;
+            for i in (1..len).rev() {
+                let j = seed.wrapping_mul(6364136223846793005).wrapping_add(i)
+                    % (i + 1);
+                pool.swap(i, j);
+            }
+            pool.truncate(limit as usize);
+            Ok(pool)
+        }
+        SeedMethod::Popularity => {
+            let candidates = base_query()
+                .order_by_desc(image::Column::TotalBookmarks)
+                .limit(limit * 3)
+                .all(db)
+                .await?;
+
+            let mut scored: Vec<(f64, image::Model)> = candidates
+                .into_iter()
+                .map(|img| (popularity_score(&img), img))
+                .collect();
+            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(scored
+                .into_iter()
+                .take(limit as usize)
+                .map(|(_, img)| img)
+                .collect())
+        }
+    }
 }
 
 /// Count accessible images
