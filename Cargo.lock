@@ -3665,6 +3665,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sha1 0.10.6",
+ "sqlx",
  "tokio",
  "tower",
  "tower-http",

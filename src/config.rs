@@ -56,14 +56,18 @@ pub struct AppConfig {
     pub log_json: bool,
     pub max_discover_hops: u32,
     pub discover_seed_limit: u64,
+    // DogeCloud OSS
+    pub dogecloud_access_key: String,
+    pub dogecloud_secret_key: String,
+    pub dogecloud_s3_bucket: String,
+    pub dogecloud_s3_endpoint: String,
 }
 
 impl AppConfig {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
 
-        let secret_key = env::var("SECRET_KEY")
-            .unwrap_or_else(|_| "change-me".into());
+        let secret_key = env::var("SECRET_KEY").unwrap_or_else(|_| "change-me".into());
         if secret_key == "change-me" {
             panic!("SECRET_KEY must be set in environment. Do not use the default 'change-me'.");
         }
@@ -78,20 +82,15 @@ impl AppConfig {
                 .unwrap_or(60),
             cdn_base_url: env::var("CDN_BASE_URL")
                 .unwrap_or_else(|_| "https://cdn.example.com/".into()),
-            image_dir: env::var("IMAGE_DIR")
-                .unwrap_or_else(|_| "./images".into()),
+            image_dir: env::var("IMAGE_DIR").unwrap_or_else(|_| "./images".into()),
             server_addr: BindAddr::parse(
-                &env::var("SERVER_ADDR")
-                    .unwrap_or_else(|_| "0.0.0.0:8000".into()),
+                &env::var("SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".into()),
             ),
-            pixiv_refresh_token: env::var("PIXIV_REFRESH_TOKEN")
-                .unwrap_or_default(),
-            pixiv_proxy: env::var("PIXIV_PROXY")
-                .unwrap_or_default(),
+            pixiv_refresh_token: env::var("PIXIV_REFRESH_TOKEN").unwrap_or_default(),
+            pixiv_proxy: env::var("PIXIV_PROXY").unwrap_or_default(),
             log_level: env::var("RUST_LOG")
                 .unwrap_or_else(|_| "randimg_backend_rs=info,tower_http=info".into()),
-            log_dir: env::var("LOG_DIR")
-                .unwrap_or_else(|_| "./logs".into()),
+            log_dir: env::var("LOG_DIR").unwrap_or_else(|_| "./logs".into()),
             log_json: env::var("LOG_JSON")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
@@ -103,6 +102,11 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5),
+            // DogeCloud OSS
+            dogecloud_access_key: env::var("DOGECLOUD_ACCESS_KEY").unwrap_or_default(),
+            dogecloud_secret_key: env::var("DOGECLOUD_SECRET_KEY").unwrap_or_default(),
+            dogecloud_s3_bucket: env::var("DOGECLOUD_S3_BUCKET").unwrap_or_default(),
+            dogecloud_s3_endpoint: env::var("DOGECLOUD_S3_ENDPOINT").unwrap_or_default(),
         }
     }
 }

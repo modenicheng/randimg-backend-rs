@@ -47,15 +47,26 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    println!("  ✓ 文件大小: {} bytes ({:.2} KB)", bytes.len(), bytes.len() as f64 / 1024.0);
+    println!(
+        "  ✓ 文件大小: {} bytes ({:.2} KB)",
+        bytes.len(),
+        bytes.len() as f64 / 1024.0
+    );
 
     println!("[2/3] 上传到 OSS...");
     let t0 = Instant::now();
     match oss.upload(oss_key, bytes.clone()).await {
         Ok(()) => {
             println!("  ✓ 上传成功! 耗时 {:?}", t0.elapsed());
-            let cdn_url = format!("{}{}", config.cdn_base_url.trim_end_matches('/'), 
-                if oss_key.starts_with('/') { oss_key.to_string() } else { format!("/{oss_key}") });
+            let cdn_url = format!(
+                "{}{}",
+                config.cdn_base_url.trim_end_matches('/'),
+                if oss_key.starts_with('/') {
+                    oss_key.to_string()
+                } else {
+                    format!("/{oss_key}")
+                }
+            );
             println!("  CDN 地址: {cdn_url}");
         }
         Err(e) => {
@@ -74,7 +85,11 @@ async fn main() {
             if downloaded == bytes {
                 println!("  ✓ 内容一致性校验通过!");
             } else {
-                println!("  ✗ 内容不一致! 上传 {} bytes vs 下载 {} bytes", bytes.len(), downloaded.len());
+                println!(
+                    "  ✗ 内容不一致! 上传 {} bytes vs 下载 {} bytes",
+                    bytes.len(),
+                    downloaded.len()
+                );
             }
         }
         Err(e) => {

@@ -1,11 +1,17 @@
-use axum::{extract::Path, extract::Query, extract::State, routing::{get, patch}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::Path,
+    extract::Query,
+    extract::State,
+    routing::{get, patch},
+};
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::db::query;
 use crate::error::AppError;
-use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -30,11 +36,8 @@ pub async fn get_tags(
     let result: Vec<serde_json::Value> = tags
         .into_iter()
         .map(|t| {
-            let search_string = format!(
-                "{}|{}",
-                t.name,
-                t.translated_name.as_deref().unwrap_or("")
-            );
+            let search_string =
+                format!("{}|{}", t.name, t.translated_name.as_deref().unwrap_or(""));
             serde_json::json!({
                 "id": t.id,
                 "name": t.name,
@@ -76,8 +79,8 @@ pub async fn delete_tag(
     Path(tag_id): Path<i32>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use crate::db::entities::image_tag_association::{self, Entity as AssocEntity};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     // Remove associations first
     AssocEntity::delete_many()

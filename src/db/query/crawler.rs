@@ -1,6 +1,6 @@
-use sea_orm::*;
-use chrono::{NaiveDateTime, Utc};
 use crate::db::entities::crawler::{self, Entity as Crawler};
+use chrono::{NaiveDateTime, Utc};
+use sea_orm::*;
 
 pub async fn create(
     db: &DatabaseConnection,

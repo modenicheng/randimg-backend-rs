@@ -17,7 +17,11 @@ fn test_extract_theme_colors_returns_correct_structure() {
     assert_eq!(result.colors.len(), 10, "Expected 10 palette colors");
 
     // Primary color must not be pure black (the image has content)
-    assert_ne!(result.primary_color, [0, 0, 0], "Primary color should not be pure black");
+    assert_ne!(
+        result.primary_color,
+        [0, 0, 0],
+        "Primary color should not be pure black"
+    );
 }
 
 #[test]
@@ -88,7 +92,11 @@ fn test_extract_theme_colors_handles_small_image() {
 
 #[test]
 fn test_extract_theme_colors_handles_single_pixel() {
-    let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(1, 1, image::Rgb([100, 150, 200])));
+    let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        1,
+        1,
+        image::Rgb([100, 150, 200]),
+    ));
 
     let result = randimg_backend_rs::color::extract_theme_colors(&img);
     assert_eq!(result.colors.len(), 10);
@@ -116,8 +124,16 @@ fn test_kmeans_basic_clustering() {
     // Centroids should be near [0,0,0] and [100,100,100]
     let mut sorted = centroids.clone();
     sorted.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
-    assert!(sorted[0][0] < 10.0, "First centroid should be near 0, got {:?}", sorted[0]);
-    assert!(sorted[1][0] > 90.0, "Second centroid should be near 100, got {:?}", sorted[1]);
+    assert!(
+        sorted[0][0] < 10.0,
+        "First centroid should be near 0, got {:?}",
+        sorted[0]
+    );
+    assert!(
+        sorted[1][0] > 90.0,
+        "Second centroid should be near 100, got {:?}",
+        sorted[1]
+    );
 }
 
 #[test]
@@ -139,7 +155,11 @@ fn test_kmeans_k_larger_than_data() {
     let data = vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
     let centroids = kmeans(&data, 5, 10, None);
     // When k > data.len(), centroids are padded by duplicating data points
-    assert_eq!(centroids.len(), 5, "Should return k centroids (padded from data)");
+    assert_eq!(
+        centroids.len(),
+        5,
+        "Should return k centroids (padded from data)"
+    );
     // All centroids should be one of the original data points
     for c in &centroids {
         assert!(
@@ -171,7 +191,11 @@ fn test_kmeans_empty_cluster_recovery() {
     let d01 = euclidean_sq_arr(&centroids[0], &centroids[1]);
     let d02 = euclidean_sq_arr(&centroids[0], &centroids[2]);
     let d12 = euclidean_sq_arr(&centroids[1], &centroids[2]);
-    assert!(d01 > 1.0 || d02 > 1.0 || d12 > 1.0, "Centroids should be distinct: {:?}", centroids);
+    assert!(
+        d01 > 1.0 || d02 > 1.0 || d12 > 1.0,
+        "Centroids should be distinct: {:?}",
+        centroids
+    );
 }
 
 #[test]
@@ -189,8 +213,16 @@ fn test_kmeans_mini_batch() {
     assert_eq!(centroids.len(), 2);
     let mut sorted = centroids.clone();
     sorted.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
-    assert!(sorted[0][0] < 10.0, "Mini-batch centroid 0 should be near 0, got {:?}", sorted[0]);
-    assert!(sorted[1][0] > 40.0, "Mini-batch centroid 1 should be near 50, got {:?}", sorted[1]);
+    assert!(
+        sorted[0][0] < 10.0,
+        "Mini-batch centroid 0 should be near 0, got {:?}",
+        sorted[0]
+    );
+    assert!(
+        sorted[1][0] > 40.0,
+        "Mini-batch centroid 1 should be near 50, got {:?}",
+        sorted[1]
+    );
 }
 
 #[test]
@@ -249,8 +281,16 @@ fn test_histogram_primary_color_basic() {
 
     let primary = histogram_primary_color_from_pixels(&pixels, 16);
     // Red quantized at 16 levels: 255 -> bin 15 -> center = 15*16+8 = 248
-    assert!(primary[0] > 200, "Primary should be red-ish, got {:?}", primary);
-    assert!(primary[2] < 50, "Primary should not be blue, got {:?}", primary);
+    assert!(
+        primary[0] > 200,
+        "Primary should be red-ish, got {:?}",
+        primary
+    );
+    assert!(
+        primary[2] < 50,
+        "Primary should not be blue, got {:?}",
+        primary
+    );
 }
 
 #[test]
@@ -281,7 +321,11 @@ fn quantize(val: u8, levels: u8) -> u8 {
 }
 
 fn quantize_pixel(r: u8, g: u8, b: u8, levels: u8) -> [u8; 3] {
-    [quantize(r, levels), quantize(g, levels), quantize(b, levels)]
+    [
+        quantize(r, levels),
+        quantize(g, levels),
+        quantize(b, levels),
+    ]
 }
 
 fn histogram_primary_color_from_pixels(pixels: &[[u8; 3]], levels: u8) -> [u8; 3] {

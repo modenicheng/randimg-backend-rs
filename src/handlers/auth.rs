@@ -1,11 +1,11 @@
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{Json, Router, extract::State, routing::post};
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::auth::{jwt::create_token, password::verify_password};
 use crate::db::query::admin;
 use crate::error::AppError;
-use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/token", post(login))

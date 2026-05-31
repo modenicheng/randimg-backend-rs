@@ -1,16 +1,16 @@
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     response::{IntoResponse, Redirect, Response},
     routing::get,
-    Json, Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::auth::middleware::{AuthUser, OptionalAuthUser};
 use crate::db::query::image;
 use crate::error::AppError;
-use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -188,10 +188,20 @@ pub async fn list_images(
     };
 
     let sort_by = query.sort_by.as_deref().unwrap_or("id");
-    let allowed_sorts = ["id", "width", "height", "aspect_ratio", "source_created_at", "created_at", "popularity"];
+    let allowed_sorts = [
+        "id",
+        "width",
+        "height",
+        "aspect_ratio",
+        "source_created_at",
+        "created_at",
+        "popularity",
+    ];
     if !allowed_sorts.contains(&sort_by) {
         return Err(AppError::BadRequest(format!(
-            "Invalid sort_by '{}'. Allowed: {}", sort_by, allowed_sorts.join(", ")
+            "Invalid sort_by '{}'. Allowed: {}",
+            sort_by,
+            allowed_sorts.join(", ")
         )));
     }
 
@@ -324,16 +334,9 @@ pub async fn color_search(
 
     let limit = query.limit.unwrap_or(20).min(100);
 
-    let results = image::color_search(
-        &state.db,
-        lab,
-        mode,
-        query.max_dist,
-        limit,
-        &state.config,
-    )
-    .await
-    .map_err(AppError::from)?;
+    let results = image::color_search(&state.db, lab, mode, query.max_dist, limit, &state.config)
+        .await
+        .map_err(AppError::from)?;
 
     Ok(Json(results))
 }
@@ -342,9 +345,9 @@ pub async fn delete_image(
     Path(image_id): Path<i32>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    use crate::db::entities::image::Entity as ImageEntity;
     use chrono::Utc;
     use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
-    use crate::db::entities::image::Entity as ImageEntity;
 
     let img = ImageEntity::find_by_id(image_id)
         .one(&state.db)

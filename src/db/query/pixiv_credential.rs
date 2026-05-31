@@ -52,7 +52,10 @@ pub async fn find_one_active_random(
                 use std::hash::{Hash, Hasher};
                 let hash = {
                     let mut h = DefaultHasher::new();
-                    chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0).hash(&mut h);
+                    chrono::Utc::now()
+                        .timestamp_nanos_opt()
+                        .unwrap_or(0)
+                        .hash(&mut h);
                     h.finish()
                 };
                 let idx = (hash as usize) % rows.len();
@@ -111,11 +114,7 @@ pub async fn update_token(
 }
 
 /// Update status only.
-pub async fn update_status(
-    db: &DatabaseConnection,
-    id: i32,
-    status: i32,
-) -> Result<(), DbErr> {
+pub async fn update_status(db: &DatabaseConnection, id: i32, status: i32) -> Result<(), DbErr> {
     let Some(model) = PixivCredential::find_by_id(id).one(db).await? else {
         return Ok(());
     };

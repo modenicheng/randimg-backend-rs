@@ -38,8 +38,8 @@ async fn dogecloud_api(
     };
 
     let sign_str = format!("{}\n{}", api_path, body);
-    let mut mac = HmacSha1::new_from_slice(keys.secret_key.as_bytes())
-        .context("HMAC init failed")?;
+    let mut mac =
+        HmacSha1::new_from_slice(keys.secret_key.as_bytes()).context("HMAC init failed")?;
     mac.update(sign_str.as_bytes());
     let sign = hex::encode(mac.finalize().into_bytes());
     let authorization = format!("TOKEN {}:{}", keys.access_key, sign);

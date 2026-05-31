@@ -1,11 +1,11 @@
 // Pixiv client integration using the pixiv-client crate
-pub use pixiv_client::{PixivApi, PixivError, ApiResponse};
-pub use pixiv_client::config::{Config, ClientConfig};
+pub use pixiv_client::config::{ClientConfig, Config};
+pub use pixiv_client::{ApiResponse, PixivApi, PixivError};
 pub mod downloader {
     pub use pixiv_client::downloader::*;
 }
+pub use pixiv_client::models::common::{ImageUrls, MetaPage, MetaSinglePage, Tag};
 pub use pixiv_client::models::illust::Illust;
-pub use pixiv_client::models::common::{ImageUrls, MetaSinglePage, MetaPage, Tag};
 pub use pixiv_client::models::user::UserPreview;
 
 /// Create a PixivApi client, optionally configured with a proxy.

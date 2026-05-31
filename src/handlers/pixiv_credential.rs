@@ -1,16 +1,17 @@
 use axum::{
+    Json, Router,
     extract::Path,
     extract::State,
     routing::{get, post},
-    Json, Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::db::query;
 use crate::error::AppError;
-use crate::AppState;
+use crate::task_queue::jobs::RefreshPixivTokenJob;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -20,7 +21,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/pixiv-credential/{id}",
-            get(get_credential).patch(update_credential).delete(delete_credential),
+            get(get_credential)
+                .patch(update_credential)
+                .delete(delete_credential),
         )
         .route("/pixiv-credential/{id}/refresh", post(refresh_credential))
         .route("/pixiv-credential/{id}/token", get(get_credential_token))
@@ -162,14 +165,11 @@ pub async fn refresh_credential(
         .map_err(AppError::from)?
         .ok_or(AppError::NotFound("Credential not found".into()))?;
 
-    crate::task_queue::submit_task(
-        &state.db,
-        "refresh_pixiv_token",
-        serde_json::json!({ "credential_id": id }),
-        5, // high priority
-    )
-    .await
-    .map_err(AppError::from)?;
+    state
+        .job_storage
+        .push_refresh_pixiv_token(RefreshPixivTokenJob { credential_id: id })
+        .await
+        .map_err(|e| AppError::Internal(e))?;
 
     Ok(Json(serde_json::json!({
         "status": "ok",

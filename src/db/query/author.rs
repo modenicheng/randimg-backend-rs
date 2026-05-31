@@ -1,5 +1,5 @@
-use sea_orm::*;
 use crate::db::entities::author::{self, Entity as Author};
+use sea_orm::*;
 
 pub async fn find_or_create(
     db: &DatabaseConnection,

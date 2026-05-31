@@ -1,5 +1,5 @@
-use sea_orm::*;
 use crate::db::entities::tag::{self, Entity as Tag};
+use sea_orm::*;
 
 pub async fn find_all(
     db: &DatabaseConnection,

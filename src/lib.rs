@@ -15,4 +15,6 @@ pub struct AppState {
     pub db: sea_orm::DatabaseConnection,
     pub config: AppConfig,
     pub oss: dogecloud::DogeCloudOss,
+    pub job_storage: task_queue::handlers::JobStorage,
+    pub apalis_pool: apalis_sqlite::SqlitePool,
 }

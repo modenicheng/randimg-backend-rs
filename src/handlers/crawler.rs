@@ -1,18 +1,24 @@
-use axum::{extract::Path, extract::Query, extract::State, routing::{get, post}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::Path,
+    extract::Query,
+    extract::State,
+    routing::{get, post},
+};
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::db::entities::image::{self, Entity as Image};
 use crate::db::query;
 use crate::error::AppError;
-use crate::task_queue;
-use crate::AppState;
+use crate::task_queue::jobs::*;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/crawler", get(list_crawlers).post(create_crawler))
-        .route("/crawler/image", get(get_crawler_image).post(error_crawler_image))
+        .route("/crawler/image", get(get_crawler_image))
         .route("/admin/accessibility-queue", get(get_accessibility_queue))
         .route("/crawler/discover", post(trigger_discover))
         .route("/crawler/{crawler_id}", get(get_crawler))
@@ -42,9 +48,7 @@ pub async fn create_crawler(
             "target_user_id is required for USER crawler".into(),
         ));
     }
-    if crawl_type == 0
-        && (body.target_start_date.is_none() || body.target_end_date.is_none())
-    {
+    if crawl_type == 0 && (body.target_start_date.is_none() || body.target_end_date.is_none()) {
         return Err(AppError::BadRequest(
             "target_end_date and target_start_date is required for RANKING crawler".into(),
         ));
@@ -62,22 +66,19 @@ pub async fn create_crawler(
     .await
     .map_err(AppError::from)?;
 
-    // Submit crawl task to background queue
-    crate::task_queue::submit_task(
-        &state.db,
-        "crawl",
-        serde_json::json!({
-            "crawler_id": crawler.id,
-            "crawl_type": crawl_type,
-            "target_user_id": body.target_user_id,
-            "target_start_date": body.target_start_date.map(|d| d.to_string()),
-            "target_end_date": body.target_end_date.map(|d| d.to_string()),
-            "target_search_prompt": body.target_search_prompt,
-        }),
-        1, // Higher priority than download/color tasks
-    )
-    .await
-    .map_err(AppError::from)?;
+    // Submit crawl task to Apalis job queue
+    state
+        .job_storage
+        .push_crawl(CrawlJob {
+            crawler_id: crawler.id,
+            crawl_type,
+            target_user_id: body.target_user_id,
+            target_start_date: body.target_start_date.map(|d| d.to_string()),
+            target_end_date: body.target_end_date.map(|d| d.to_string()),
+            target_search_prompt: body.target_search_prompt,
+        })
+        .await
+        .map_err(|e| AppError::Internal(e))?;
 
     Ok(Json(serde_json::json!({
         "id": crawler.id,
@@ -133,71 +134,28 @@ pub async fn get_crawler_image(
 
         let count = images.len();
         for img in images {
-            task_queue::submit_task(
-                &state.db,
-                "color_extract",
-                serde_json::json!({
-                    "image_id": img.id,
-                    "image_path": img.image_path,
-                }),
-                0,
-            )
-            .await
-            .map_err(AppError::from)?;
+            state
+                .job_storage
+                .push_color_extract(ColorExtractJob {
+                    image_id: img.id,
+                    image_path: img.image_path,
+                })
+                .await
+                .map_err(|e| AppError::Internal(e))?;
         }
 
         return Ok(Json(serde_json::json!({
             "status": "ok",
             "count": count,
+            "message": "Color extraction jobs submitted to Apalis queue",
         })));
     }
 
-    let task = task_queue::claim_next_task(&state.db, "color_extract")
-        .await
-        .map_err(AppError::from)?;
-
-    match task {
-        Some(t) => {
-            // Use image_id from task field or payload
-            let image_id = t.image_id
-                .or_else(|| t.payload["image_id"].as_i64().map(|v| v as i32));
-            let image_path = t.image_path
-                .as_deref()
-                .or_else(|| t.payload["image_path"].as_str());
-
-            Ok(Json(serde_json::json!({
-                "id": image_id,
-                "image_path": image_path,
-                "task_id": t.id,
-            })))
-        }
-        None => Err(AppError::NotFound(
-            "No image found. Please try init first.".into(),
-        )),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct ErrorCrawlerImageRequest {
-    pub task_id: Option<String>,
-    pub id: Option<i64>,
-}
-
-/// POST /crawler/image  Error callback
-pub async fn error_crawler_image(
-    State(state): State<Arc<AppState>>,
-    _auth: AuthUser,
-    Json(body): Json<ErrorCrawlerImageRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let task_id = body.task_id.ok_or_else(|| {
-        AppError::BadRequest("task_id is required".into())
-    })?;
-
-    task_queue::fail_task(&state.db, &task_id, "requeued by worker")
-        .await
-        .map_err(AppError::from)?;
-
-    Ok(Json(serde_json::json!({ "status": "ok" })))
+    // With Apalis, tasks are processed automatically by workers.
+    // No manual task claiming needed.
+    Err(AppError::BadRequest(
+        "Use ?init=true to submit color extraction jobs. Processing is automatic via Apalis workers.".into(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -213,16 +171,16 @@ pub async fn trigger_discover(
     _auth: AuthUser,
     Json(body): Json<DiscoverRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let payload = serde_json::json!({
-        "hop": 0,
-        "max_hops": body.max_hops,
-        "seed_limit": body.seed_limit,
-        "seed_method": body.seed_method,
-    });
-
-    task_queue::submit_task(&state.db, "discover", payload, 0)
+    state
+        .job_storage
+        .push_discover(DiscoverJob {
+            hop: 0,
+            max_hops: body.max_hops,
+            seed_limit: body.seed_limit,
+            seed_method: body.seed_method,
+        })
         .await
-        .map_err(AppError::from)?;
+        .map_err(|e| AppError::Internal(e))?;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -247,45 +205,27 @@ pub async fn get_accessibility_queue(
 
         let count = images.len();
         for img in images {
-            task_queue::submit_task(
-                &state.db,
-                "accessibility_check",
-                serde_json::json!({
-                    "image_id": img.id,
-                    "image_path": img.image_path,
-                }),
-                0,
-            )
-            .await
-            .map_err(AppError::from)?;
+            state
+                .job_storage
+                .push_accessibility_check(AccessibilityCheckJob {
+                    image_id: img.id,
+                    image_path: img.image_path,
+                })
+                .await
+                .map_err(|e| AppError::Internal(e))?;
         }
 
         return Ok(Json(serde_json::json!({
             "status": "ok",
             "count": count,
+            "message": "Accessibility check jobs submitted to Apalis queue",
         })));
     }
 
-    let task = task_queue::claim_next_task(&state.db, "accessibility_check")
-        .await
-        .map_err(AppError::from)?;
-
-    match task {
-        Some(t) => {
-            let image_id = t.image_id
-                .or_else(|| t.payload["image_id"].as_i64().map(|v| v as i32));
-            let image_path = t.image_path
-                .as_deref()
-                .or_else(|| t.payload["image_path"].as_str());
-
-            Ok(Json(serde_json::json!({
-                "id": image_id,
-                "image_path": image_path,
-                "task_id": t.id,
-            })))
-        },
-        None => Err(AppError::NotFound("Queue empty".into())),
-    }
+    // With Apalis, tasks are processed automatically by workers.
+    Err(AppError::BadRequest(
+        "Use ?init=true to submit accessibility check jobs. Processing is automatic via Apalis workers.".into(),
+    ))
 }
 
 /// GET /crawler/{crawler_id}  Get single crawler detail

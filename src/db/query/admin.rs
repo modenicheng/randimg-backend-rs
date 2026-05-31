@@ -1,5 +1,5 @@
-use sea_orm::*;
 use crate::db::entities::admin::{self, Entity as Admin};
+use sea_orm::*;
 
 pub async fn find_by_username(
     db: &DatabaseConnection,

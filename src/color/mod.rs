@@ -27,7 +27,11 @@ fn quantize(val: u8, levels: u8) -> u8 {
 
 /// Quantize RGB into a bin key
 fn quantize_pixel(r: u8, g: u8, b: u8, levels: u8) -> [u8; 3] {
-    [quantize(r, levels), quantize(g, levels), quantize(b, levels)]
+    [
+        quantize(r, levels),
+        quantize(g, levels),
+        quantize(b, levels),
+    ]
 }
 
 /// Extract primary color using histogram (mode of quantized colors), parallel.
@@ -137,7 +141,11 @@ fn lab_to_rgb(l: f64, a: f64, b: f64) -> [u8; 3] {
 
     let finv = |t: f64| -> f64 {
         const DELTA: f64 = 6.0 / 29.0;
-        if t > DELTA { t * t * t } else { 3.0 * DELTA * DELTA * (t - 4.0 / 29.0) }
+        if t > DELTA {
+            t * t * t
+        } else {
+            3.0 * DELTA * DELTA * (t - 4.0 / 29.0)
+        }
     };
 
     let x = finv(fx) * 0.95047;
@@ -172,10 +180,7 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
     let rgb = small.to_rgb8();
 
     // Collect pixels as [u8; 3]
-    let pixels: Vec<[u8; 3]> = rgb
-        .pixels()
-        .map(|p| [p[0], p[1], p[2]])
-        .collect();
+    let pixels: Vec<[u8; 3]> = rgb.pixels().map(|p| [p[0], p[1], p[2]]).collect();
 
     if pixels.is_empty() {
         return ThemeColors {

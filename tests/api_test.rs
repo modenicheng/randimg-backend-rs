@@ -24,10 +24,7 @@ async fn test_login_returns_token() {
     let client = reqwest::Client::new();
     let resp = client
         .post("http://localhost:8000/token")
-        .form(&[
-            ("username", "test"),
-            ("password", "test"),
-        ])
+        .form(&[("username", "test"), ("password", "test")])
         .send()
         .await;
 
@@ -42,10 +39,7 @@ async fn test_login_returns_token() {
 #[tokio::test]
 async fn test_tags_endpoint() {
     let client = reqwest::Client::new();
-    let resp = client
-        .get("http://localhost:8000/tags")
-        .send()
-        .await;
+    let resp = client.get("http://localhost:8000/tags").send().await;
 
     match resp {
         Ok(r) => {
@@ -60,10 +54,7 @@ async fn test_tags_endpoint() {
 #[tokio::test]
 async fn test_statistic_endpoint() {
     let client = reqwest::Client::new();
-    let resp = client
-        .get("http://localhost:8000/statistic")
-        .send()
-        .await;
+    let resp = client.get("http://localhost:8000/statistic").send().await;
 
     match resp {
         Ok(r) => {

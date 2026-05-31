@@ -4,3 +4,5 @@ color_extract_result.html
 .env
 data/
 logs/
+
+.claude

@@ -60,7 +60,12 @@ impl CredentialCache {
     }
 
     /// 存入新的凭证
-    pub async fn set(&self, credentials: TempCredentials, bucket: BucketInfo, expires_in_secs: i64) {
+    pub async fn set(
+        &self,
+        credentials: TempCredentials,
+        bucket: BucketInfo,
+        expires_in_secs: i64,
+    ) {
         let expires_at = chrono::Utc::now().timestamp() + expires_in_secs;
         let mut guard = self.inner.write().await;
         *guard = Some(CachedCredentials {

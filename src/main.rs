@@ -1,14 +1,18 @@
+use apalis::layers::retry::RetryPolicy;
+use apalis::prelude::*;
+use apalis_sqlite::SqliteStorage;
 use axum::Router;
 use randimg_backend_rs::config::{AppConfig, BindAddr};
-use randimg_backend_rs::{db, db::query, handlers, task_queue, AppState};
+use randimg_backend_rs::task_queue::handlers::{JobStorage, *};
+use randimg_backend_rs::task_queue::jobs::*;
+use randimg_backend_rs::{AppState, db, db::query, handlers};
 use std::sync::Arc;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_appender::rolling;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
@@ -59,21 +63,32 @@ async fn main() {
 
     let db = db::init_database(&config.database_url).await;
 
-    let oss = randimg_backend_rs::dogecloud::DogeCloudOss::new(
-        config.dogecloud_access_key.clone(),
-        config.dogecloud_secret_key.clone(),
-    );
+    let oss = randimg_backend_rs::dogecloud::DogeCloudOss::new(&config);
+
+    // --- Apalis job queue setup ------------------------------------------------
+    let apalis_pool = apalis_sqlite::SqlitePool::connect(&config.database_url)
+        .await
+        .expect("Failed to connect Apalis SQLite pool");
+    SqliteStorage::<(), (), ()>::setup(&apalis_pool)
+        .await
+        .expect("Failed to run Apalis migrations");
+
+    let job_storage = JobStorage::new(&apalis_pool);
 
     let state = Arc::new(AppState {
         db,
         config: config.clone(),
         oss,
+        job_storage,
+        apalis_pool: apalis_pool.clone(),
     });
 
     // --- Pixiv credential seed & auto-refresh ----------------------------------
     // Seed from env var if DB has no credentials yet
     if !config.pixiv_refresh_token.is_empty() {
-        let existing = query::pixiv_credential::find_all(&state.db).await.unwrap_or_default();
+        let existing = query::pixiv_credential::find_all(&state.db)
+            .await
+            .unwrap_or_default();
         if existing.is_empty() {
             match query::pixiv_credential::create(
                 &state.db,
@@ -97,18 +112,14 @@ async fn main() {
     match query::pixiv_credential::find_all(&state.db).await {
         Ok(creds) => {
             for cred in creds.iter().filter(|c| c.status == 0) {
-                if let Err(e) = task_queue::submit_task(
-                    &state.db,
-                    "refresh_pixiv_token",
-                    serde_json::json!({ "credential_id": cred.id }),
-                    5,
-                )
-                .await
+                if let Err(e) = state
+                    .job_storage
+                    .push_refresh_pixiv_token(RefreshPixivTokenJob {
+                        credential_id: cred.id,
+                    })
+                    .await
                 {
-                    tracing::error!(
-                        cred_id = cred.id,
-                        "Failed to submit refresh task: {}", e
-                    );
+                    tracing::error!(cred_id = cred.id, "Failed to submit refresh task: {}", e);
                 }
             }
         }
@@ -117,8 +128,8 @@ async fn main() {
         }
     }
 
-    // --- Task runners --------------------------------------------------------
-    let runner_handles = task_queue::runner::start_runner(state.clone());
+    // --- Apalis workers -------------------------------------------------------
+    let worker_handles = spawn_workers(state.clone(), &apalis_pool);
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -142,9 +153,7 @@ async fn main() {
 
     match &config.server_addr {
         BindAddr::Tcp(addr) => {
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .unwrap();
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
             tracing::info!(
                 address = %listener.local_addr().unwrap(),
                 database = %config.database_url,
@@ -175,12 +184,12 @@ async fn main() {
         }
     }
 
-    tracing::info!("Shutting down — aborting background task runners…");
-    for h in &runner_handles {
+    tracing::info!("Shutting down — aborting Apalis workers…");
+    for h in &worker_handles {
         h.abort();
     }
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        for h in runner_handles {
+        for h in worker_handles {
             let _ = h.await;
         }
     })
@@ -206,4 +215,54 @@ async fn shutdown_signal() {
             tracing::info!("Received SIGTERM");
         }
     }
+}
+
+/// Spawn Apalis workers for all job types. Returns handles for graceful shutdown.
+fn spawn_workers(
+    state: Arc<AppState>,
+    _pool: &apalis_sqlite::SqlitePool,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let js = &state.job_storage;
+
+    // Helper macro to build and spawn a worker.
+    // Clones the storage out of the Mutex (shares the same pool).
+    macro_rules! spawn_worker {
+        ($name:expr, $storage:expr, $handler:expr, $concurrency:expr) => {{
+            let storage = $storage.blocking_lock().clone();
+            let state = state.clone();
+            let js_clone = js.clone();
+            let handle = tokio::spawn(async move {
+                let worker = WorkerBuilder::new($name)
+                    .backend(storage)
+                    .data(Data::new(state.clone()))
+                    .data(Data::new(js_clone))
+                    .concurrency($concurrency)
+                    .retry(RetryPolicy::retries(3))
+                    .enable_tracing()
+                    .build($handler);
+                worker.run().await.ok();
+            });
+            handle
+        }};
+    }
+
+    vec![
+        spawn_worker!("crawl", js.crawl, handle_crawl, 2),
+        spawn_worker!("download", js.download, handle_download, 4),
+        spawn_worker!("color-extract", js.color_extract, handle_color_extract, 2),
+        spawn_worker!("upload", js.upload, handle_upload, 2),
+        spawn_worker!(
+            "accessibility-check",
+            js.accessibility_check,
+            handle_accessibility_check,
+            2
+        ),
+        spawn_worker!("discover", js.discover, handle_discover, 1),
+        spawn_worker!(
+            "refresh-pixiv-token",
+            js.refresh_pixiv_token,
+            handle_refresh_pixiv_token,
+            1
+        ),
+    ]
 }
