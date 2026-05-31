@@ -7,7 +7,7 @@ mod handlers;
 mod pixiv;
 mod task_queue;
 
-use axum::{routing::get, Router};
+use axum::{routing::get, routing::post, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
@@ -46,6 +46,7 @@ async fn main() {
         .route("/list", get(handlers::image::list_images))
         .route("/tags", get(handlers::tag::get_tags))
         .route("/statistic", get(handlers::statistic::get_statistic))
+        .route("/token", post(handlers::auth::login))
         .layer(cors)
         .with_state(state);
 

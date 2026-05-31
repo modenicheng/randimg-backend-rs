@@ -1,3 +1,5 @@
+pub mod auth;
+pub mod crawler;
 pub mod image;
 pub mod statistic;
 pub mod tag;
