@@ -433,6 +433,33 @@ pub async fn update_fields(
     Ok(Some(result))
 }
 
+/// Find seed images for discover/next-hop crawling.
+/// Returns top `limit` images by popularity_score (time-decayed engagement).
+pub async fn find_discover_seeds(
+    db: &DatabaseConnection,
+    limit: u64,
+) -> Result<Vec<image::Model>, DbErr> {
+    // Fetch candidates ordered by raw engagement, then re-rank with popularity_score
+    let candidates = Image::find()
+        .filter(image::Column::SourceId.is_not_null())
+        .filter(image::Column::IsPublic.eq(true))
+        .order_by_desc(image::Column::TotalBookmarks)
+        .limit(limit * 3)
+        .all(db)
+        .await?;
+
+    let mut scored: Vec<(f64, image::Model)> = candidates
+        .into_iter()
+        .map(|img| (popularity_score(&img), img))
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(scored
+        .into_iter()
+        .take(limit as usize)
+        .map(|(_, img)| img)
+        .collect())
+}
+
 /// Count accessible images
 pub async fn count_accessible(db: &DatabaseConnection) -> Result<u64, DbErr> {
     Image::find()

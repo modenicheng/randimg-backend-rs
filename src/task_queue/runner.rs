@@ -10,6 +10,7 @@ use super::tasks;
 pub fn start_runner(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
     let task_types = vec![
         "color_extract",
+        "discover",
         "download",
         "upload",
         "crawl",
@@ -29,6 +30,7 @@ pub fn start_runner(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
                         tracing::info!("Processing task {}: {}", task.id, task.task_type);
                         let result = match task.task_type.as_str() {
                             "color_extract" => tasks::color_extract::run(&state, &task).await,
+                            "discover" => tasks::discover::run(&state, &task).await,
                             "download" => tasks::download::run(&state, &task).await,
                             "upload" => tasks::upload::run(&state, &task).await,
                             "crawl" => tasks::crawl::run(&state, &task).await,

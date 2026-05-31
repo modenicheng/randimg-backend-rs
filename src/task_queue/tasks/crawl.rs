@@ -10,6 +10,15 @@ pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
         .as_i64()
         .ok_or("missing crawl_type")? as i32;
 
+    let crawler_id = task.payload["crawler_id"]
+        .as_i64()
+        .ok_or("missing crawler_id")? as i32;
+
+    // Mark crawler as running
+    query::crawler::mark_running(&state.db, crawler_id)
+        .await
+        .map_err(|e| format!("Failed to mark crawler running: {}", e))?;
+
     // Create and authenticate Pixiv API
     let api = crate::pixiv::create_api(&state.config.pixiv_proxy);
     if !state.config.pixiv_refresh_token.is_empty() {
@@ -18,12 +27,43 @@ pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
             .map_err(|e| format!("Pixiv auth failed: {}", e))?;
     }
 
-    match crawl_type {
+    let result = match crawl_type {
         0 => crawl_ranking(state, &api, &task.payload).await,
         1 => crawl_user(state, &api, &task.payload).await,
         2 => crawl_bookmarks(state, &api, &task.payload).await,
         _ => Err(format!("Unknown crawl_type: {}", crawl_type)),
+    };
+
+    // Update crawler status based on result
+    match &result {
+        Ok(()) => {
+            // Count images saved by this crawler
+            let total = crate::db::entities::image::Entity::find()
+                .filter(crate::db::entities::image::Column::SourceId.is_not_null())
+                .count(&state.db)
+                .await
+                .unwrap_or(0) as i32;
+
+            let _ = query::crawler::mark_completed(&state.db, crawler_id, total).await;
+
+            // Trigger autonomous discover for next-hop crawling
+            if let Err(e) = task_queue::submit_task(
+                &state.db,
+                "discover",
+                serde_json::json!({ "hop": 0 }),
+                0,
+            )
+            .await
+            {
+                tracing::error!("Failed to submit discover task after crawl: {}", e);
+            }
+        }
+        Err(_) => {
+            let _ = query::crawler::mark_failed(&state.db, crawler_id).await;
+        }
     }
+
+    result
 }
 
 async fn crawl_ranking(
@@ -150,7 +190,7 @@ async fn crawl_bookmarks(
 }
 
 /// Save an Illust to the database and submit download tasks
-async fn save_illust(state: &AppState, illust: &Illust) -> Result<(), String> {
+pub(crate) async fn save_illust(state: &AppState, illust: &Illust) -> Result<(), String> {
     let db = &state.db;
 
     // Upsert author

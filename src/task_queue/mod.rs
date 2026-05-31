@@ -38,47 +38,50 @@ pub async fn submit_task(
     model.insert(db).await
 }
 
-/// Claim next pending task (atomic via UPDATE ... WHERE status='pending')
+/// Claim next pending task atomically using a single UPDATE with subquery.
+/// This avoids the race condition of a separate SELECT + UPDATE.
 pub async fn claim_next_task(
     db: &DatabaseConnection,
     task_type: &str,
 ) -> Result<Option<task::Model>, DbErr> {
-    // Find the best candidate
-    let pending = TaskEntity::find()
-        .filter(task::Column::Status.eq("pending"))
-        .filter(task::Column::TaskType.eq(task_type))
-        .order_by_desc(task::Column::Priority)
-        .order_by_asc(task::Column::CreatedAt)
-        .one(db)
-        .await?;
+    let now = Utc::now().naive_utc();
 
-    let Some(t) = pending else {
+    let stmt = Statement::from_sql_and_values(
+        db.get_database_backend(),
+        r#"UPDATE background_tasks
+           SET status = 'running', started_at = $1
+           WHERE id = (
+               SELECT id FROM background_tasks
+               WHERE status = 'pending' AND task_type = $2
+               ORDER BY priority DESC, created_at ASC
+               LIMIT 1
+           )
+           RETURNING id, task_type, payload, image_id, image_path,
+                     status, priority, retry_count, max_retries,
+                     created_at, started_at, finished_at, last_error"#,
+        vec![now.into(), task_type.into()],
+    );
+
+    let Some(row) = db.query_one(stmt).await? else {
         return Ok(None);
     };
 
-    // Atomic update: only succeed if still pending (prevents race condition)
-    let now = Utc::now().naive_utc();
-    let update_result = task::ActiveModel {
-        id: Set(t.id.clone()),
-        status: Set("running".to_string()),
-        started_at: Set(Some(now)),
-        ..Default::default()
-    }
-    .update(db)
-    .await;
-
-    match update_result {
-        Ok(updated) => {
-            // Verify we actually claimed it (status should be running now)
-            if updated.status == "running" {
-                Ok(Some(updated))
-            } else {
-                // Another worker claimed it first
-                Ok(None)
-            }
-        }
-        Err(_) => Ok(None),
-    }
+    // Map QueryResult columns to task::Model by index (matching RETURNING order)
+    Ok(Some(task::Model {
+        id: row.try_get_by_index(0)?,
+        task_type: row.try_get_by_index(1)?,
+        payload: row.try_get_by_index(2)?,
+        image_id: row.try_get_by_index(3)?,
+        image_path: row.try_get_by_index(4)?,
+        status: row.try_get_by_index(5)?,
+        priority: row.try_get_by_index(6)?,
+        retry_count: row.try_get_by_index(7)?,
+        max_retries: row.try_get_by_index(8)?,
+        created_at: row.try_get_by_index(9)?,
+        started_at: row.try_get_by_index(10)?,
+        finished_at: row.try_get_by_index(11)?,
+        last_error: row.try_get_by_index(12)?,
+    }))
 }
 
 /// Mark task completed

@@ -94,6 +94,12 @@ async fn main() {
                 .post(handlers::crawler::error_crawler_image),
         )
         .route("/adjust-accessible", get(handlers::crawler::get_adjust_accessible))
+        .route("/tasks", get(handlers::task::list_tasks))
+        .route(
+            "/tasks/{task_id}",
+            get(handlers::task::get_task),
+        )
+        .route("/tasks/{task_id}/retry", post(handlers::task::retry_task))
         .nest_service("/images", ServeDir::new(&config.image_dir))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
