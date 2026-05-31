@@ -1,3 +1,18 @@
-pub async fn init_database(_database_url: &str) -> sea_orm::DatabaseConnection {
-    todo!("Database initialization will be implemented in Task 2")
+use migration::MigratorTrait;
+use sea_orm::{Database, DatabaseConnection};
+
+pub mod entities;
+pub mod query;
+
+pub async fn init_database(database_url: &str) -> DatabaseConnection {
+    let db = Database::connect(database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    // Run migrations
+    migration::Migrator::up(&db, None)
+        .await
+        .expect("Failed to run migrations");
+
+    db
 }
