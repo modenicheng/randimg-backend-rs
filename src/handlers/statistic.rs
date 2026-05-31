@@ -1,10 +1,14 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, routing::get, Json, Router};
 use sea_orm::{EntityTrait, PaginatorTrait};
 use std::sync::Arc;
 
 use crate::db::query;
 use crate::error::AppError;
 use crate::AppState;
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new().route("/statistic", get(get_statistic))
+}
 
 pub async fn get_statistic(
     State(state): State<Arc<AppState>>,

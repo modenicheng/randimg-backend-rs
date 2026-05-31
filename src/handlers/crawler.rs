@@ -1,4 +1,4 @@
-use axum::{extract::Path, extract::Query, extract::State, Json};
+use axum::{extract::Path, extract::Query, extract::State, routing::{get, post}, Json, Router};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -8,6 +8,15 @@ use crate::db::query;
 use crate::error::AppError;
 use crate::task_queue;
 use crate::AppState;
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/crawler", get(list_crawlers).post(create_crawler))
+        .route("/crawler/image", get(get_crawler_image).post(error_crawler_image))
+        .route("/admin/accessibility-queue", get(get_accessibility_queue))
+        .route("/crawler/discover", post(trigger_discover))
+        .route("/crawler/{crawler_id}", get(get_crawler))
+}
 
 #[derive(Deserialize)]
 pub struct CreateCrawlerRequest {

@@ -1,4 +1,4 @@
-use axum::{extract::Path, extract::Query, extract::State, Json};
+use axum::{extract::Path, extract::Query, extract::State, routing::{get, post}, Json, Router};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -6,6 +6,13 @@ use crate::auth::middleware::AuthUser;
 use crate::db::query;
 use crate::error::AppError;
 use crate::AppState;
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/tasks", get(list_tasks))
+        .route("/tasks/{task_id}", get(get_task))
+        .route("/tasks/{task_id}/retry", post(retry_task))
+}
 
 #[derive(Deserialize)]
 pub struct ListTasksQuery {

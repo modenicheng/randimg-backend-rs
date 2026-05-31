@@ -1,4 +1,4 @@
-use axum::{extract::Path, extract::Query, extract::State, Json};
+use axum::{extract::Path, extract::Query, extract::State, routing::get, Json, Router};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -7,6 +7,12 @@ use crate::db::entities::image::{self, Entity as ImageEntity};
 use crate::db::query;
 use crate::error::AppError;
 use crate::AppState;
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/authors", get(list_authors))
+        .route("/authors/{author_id}", get(get_author))
+}
 
 #[derive(Deserialize)]
 pub struct AuthorQuery {

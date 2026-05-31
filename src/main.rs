@@ -1,4 +1,4 @@
-use axum::{routing::get, routing::patch, routing::post, Router};
+use axum::Router;
 use randimg_backend_rs::{config::AppConfig, db, handlers, task_queue, AppState};
 use std::sync::Arc;
 use tokio::signal;
@@ -72,49 +72,14 @@ async fn main() {
         .allow_headers(Any);
 
     let app = Router::new()
-        .route("/health", get(handlers::health::health_check))
-        .route("/", get(handlers::image::random_image))
-        .route(
-            "/image/{image_id}",
-            get(handlers::image::get_image)
-                .patch(handlers::image::patch_image)
-                .delete(handlers::image::delete_image),
-        )
-        .route("/list", get(handlers::image::list_images))
-        .route("/color/search", get(handlers::image::color_search))
-        .route("/tags", get(handlers::tag::get_tags))
-        .route("/statistic", get(handlers::statistic::get_statistic))
-        .route("/token", post(handlers::auth::login))
-        .route(
-            "/crawler",
-            get(handlers::crawler::list_crawlers).post(handlers::crawler::create_crawler),
-        )
-        .route(
-            "/crawler/image",
-            get(handlers::crawler::get_crawler_image)
-                .post(handlers::crawler::error_crawler_image),
-        )
-        .route("/admin/accessibility-queue", get(handlers::crawler::get_accessibility_queue))
-        .route("/crawler/discover", post(handlers::crawler::trigger_discover))
-        .route("/tasks", get(handlers::task::list_tasks))
-        .route(
-            "/tasks/{task_id}",
-            get(handlers::task::get_task),
-        )
-        .route("/tasks/{task_id}/retry", post(handlers::task::retry_task))
-        .route("/authors", get(handlers::author::list_authors))
-        .route(
-            "/authors/{author_id}",
-            get(handlers::author::get_author),
-        )
-        .route(
-            "/tags/{tag_id}",
-            patch(handlers::tag::update_tag).delete(handlers::tag::delete_tag),
-        )
-        .route(
-            "/crawler/{crawler_id}",
-            get(handlers::crawler::get_crawler),
-        )
+        .merge(handlers::health::routes())
+        .merge(handlers::image::routes())
+        .merge(handlers::auth::routes())
+        .merge(handlers::tag::routes())
+        .merge(handlers::statistic::routes())
+        .merge(handlers::author::routes())
+        .merge(handlers::crawler::routes())
+        .merge(handlers::task::routes())
         .nest_service("/images", ServeDir::new(&config.image_dir))
         .layer(TraceLayer::new_for_http())
         .layer(cors)

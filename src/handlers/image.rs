@@ -1,7 +1,8 @@
 use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Redirect, Response},
-    Json,
+    routing::get,
+    Json, Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -10,6 +11,17 @@ use crate::auth::middleware::{AuthUser, OptionalAuthUser};
 use crate::db::query::image;
 use crate::error::AppError;
 use crate::AppState;
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/", get(random_image))
+        .route(
+            "/image/{image_id}",
+            get(get_image).patch(patch_image).delete(delete_image),
+        )
+        .route("/list", get(list_images))
+        .route("/color/search", get(color_search))
+}
 
 #[derive(Deserialize)]
 pub struct ImageQuery {

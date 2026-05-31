@@ -1,4 +1,4 @@
-use axum::{extract::Path, extract::Query, extract::State, Json};
+use axum::{extract::Path, extract::Query, extract::State, routing::{get, patch}, Json, Router};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -6,6 +6,12 @@ use crate::auth::middleware::AuthUser;
 use crate::db::query;
 use crate::error::AppError;
 use crate::AppState;
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/tags", get(get_tags))
+        .route("/tags/{tag_id}", patch(update_tag).delete(delete_tag))
+}
 
 #[derive(Deserialize)]
 pub struct TagQuery {
