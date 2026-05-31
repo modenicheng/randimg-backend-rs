@@ -1,25 +1,9 @@
-mod auth;
-mod color;
-mod config;
-mod db;
-mod error;
-mod handlers;
-mod pixiv;
-mod task_queue;
-
 use axum::{routing::get, routing::post, Router};
+use randimg_backend_rs::{config::AppConfig, db, handlers, task_queue, AppState};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
-
-use config::AppConfig;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db: sea_orm::DatabaseConnection,
-    pub config: AppConfig,
-}
 
 #[tokio::main]
 async fn main() {
