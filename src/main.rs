@@ -52,6 +52,10 @@ async fn main() {
         .route("/tags", get(handlers::tag::get_tags))
         .route("/statistic", get(handlers::statistic::get_statistic))
         .route("/token", post(handlers::auth::login))
+        .route(
+            "/crawler",
+            get(handlers::crawler::list_crawlers).post(handlers::crawler::create_crawler),
+        )
         .layer(cors)
         .with_state(state);
 
