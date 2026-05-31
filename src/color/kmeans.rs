@@ -17,7 +17,12 @@ pub fn kmeans(
         return vec![];
     }
     if data.len() <= k {
-        return data.to_vec();
+        // Not enough data for k clusters — duplicate points to fill
+        let mut result = data.to_vec();
+        while result.len() < k {
+            result.push(data[result.len() % data.len()]);
+        }
+        return result;
     }
 
     // KMeans++ initialization
