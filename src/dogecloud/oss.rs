@@ -5,9 +5,9 @@
 use anyhow::{Context, Result};
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
+use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Region;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -89,7 +89,9 @@ impl DogeCloudOss {
         }
 
         // 缓存凭证（2小时有效期）
-        self.cache.set(new_creds.clone(), new_bucket.clone(), 2 * 60 * 60).await;
+        self.cache
+            .set(new_creds.clone(), new_bucket.clone(), 2 * 60 * 60)
+            .await;
 
         // 构建 S3 Client
         let client = build_s3_client(&new_creds, &new_bucket.s3_endpoint).await?;
@@ -210,9 +212,18 @@ async fn build_s3_client(creds: &TempCredentials, endpoint: &str) -> Result<Clie
         .load()
         .await;
 
+    // endpoint 可能已包含 scheme 前缀（如 "https://cos.ap-shanghai.myqcloud.com"），
+    // 也可能只有主机名（如 "cos.ap-shanghai.myqcloud.com"），统一处理。
+    let endpoint_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        endpoint.to_string()
+    } else {
+        format!("https://{endpoint}")
+    };
+
+    tracing::debug!(endpoint_url = %endpoint_url, "Building S3 client");
+
     let s3_config = aws_sdk_s3::config::Builder::from(&shared_config)
-        .endpoint_url(format!("https://{}", endpoint))
-        .force_path_style(true)
+        .endpoint_url(endpoint_url)
         .build();
 
     Ok(Client::from_conf(s3_config))
