@@ -28,27 +28,29 @@ pub struct ListTasksQuery {
     pub offset: Option<u64>,
 }
 
-/// Map Apalis status values to human-readable equivalents.
-fn map_status(status: &str) -> &str {
+/// Return current UTC timestamp + 8 hours timezone offset (seconds since epoch).
+#[allow(dead_code)]
+fn now_timestamp() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::hours(8)).timestamp()
+}
+
+/// Map integer status values to human-readable equivalents.
+fn map_status(status: i32) -> &'static str {
     match status {
-        "Pending" => "pending",
-        "Running" => "running",
-        "Done" => "completed",
-        "Failed" => "failed",
-        "Killed" => "killed",
-        other => other,
+        0 => "failed",
+        2 => "pending",
+        3 => "completed",
+        _ => "unknown",
     }
 }
 
-/// Map human-readable status to Apalis status for filtering.
-fn unmap_status(status: &str) -> &str {
+/// Map human-readable status to integer for filtering.
+fn unmap_status(status: &str) -> i32 {
     match status {
-        "pending" => "Pending",
-        "running" => "Running",
-        "completed" => "Done",
-        "failed" => "Failed",
-        "killed" => "Killed",
-        other => other,
+        "pending" | "running" => 2,
+        "failed" | "killed" => 0,
+        "completed" => 3,
+        _ => 2,
     }
 }
 
@@ -57,7 +59,7 @@ fn unmap_status(status: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 const SELECT_COLS: &str =
-    "id, job_type, status, attempts, max_attempts, run_at, done_at, last_result, priority";
+    "id, job_type, status, attempts, retries, run_at, done_at, last_result, priority";
 
 #[cfg(feature = "sqlite")]
 const JOBS_TABLE: &str = "Jobs";
@@ -72,9 +74,9 @@ const JOBS_TABLE: &str = "apalis.jobs";
 struct ApalisJobRow {
     id: String,
     job_type: String,
-    status: String,
+    status: i32,
     attempts: i32,
-    max_attempts: i32,
+    retries: i32,
     #[cfg(feature = "sqlite")]
     run_at: i64,
     #[cfg(feature = "postgres")]
@@ -94,26 +96,29 @@ struct ApalisJobRow {
 // Timestamp / last_result formatting helpers (feature-gated)
 // ---------------------------------------------------------------------------
 
+/// UTC+8 timezone offset (Asia/Shanghai).
+const UTC8: chrono::FixedOffset = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+
 #[cfg(feature = "sqlite")]
 fn fmt_ts(ts: Option<i64>) -> Option<String> {
     ts.and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| dt.with_timezone(&UTC8).format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
 #[cfg(feature = "postgres")]
 fn fmt_ts(ts: Option<chrono::DateTime<chrono::Utc>>) -> Option<String> {
-    ts.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+    ts.map(|dt| dt.with_timezone(&UTC8).format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
 #[cfg(feature = "sqlite")]
 fn fmt_ts_req(ts: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(ts, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| dt.with_timezone(&UTC8).format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
 #[cfg(feature = "postgres")]
 fn fmt_ts_req(ts: chrono::DateTime<chrono::Utc>) -> Option<String> {
-    Some(ts.format("%Y-%m-%d %H:%M:%S").to_string())
+    Some(ts.with_timezone(&UTC8).format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
 #[cfg(feature = "sqlite")]
@@ -133,7 +138,7 @@ fn fmt_last_result(v: &Option<serde_json::Value>) -> Option<String> {
 async fn fetch_tasks(
     pool: &crate::ApalisPool,
     task_type: Option<&str>,
-    status: Option<&str>,
+    status: Option<i32>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<ApalisJobRow>, sqlx::Error> {
@@ -245,14 +250,14 @@ fn row_to_json(t: &ApalisJobRow) -> serde_json::Value {
     serde_json::json!({
         "id": t.id,
         "task_type": t.job_type,
-        "status": map_status(&t.status),
+        "status": map_status(t.status),
         "priority": t.priority,
         "retry_count": t.attempts,
-        "max_retries": t.max_attempts,
+        "retries": t.retries,
         "created_at": fmt_ts_req(t.run_at),
         "started_at": serde_json::Value::Null,
         "finished_at": fmt_ts(t.done_at),
-        "last_error": fmt_last_result(&t.last_result),
+        "last_result": fmt_last_result(&t.last_result),
     })
 }
 
@@ -276,7 +281,7 @@ pub async fn list_tasks(
     let rows = fetch_tasks(
         pool,
         q.task_type.as_deref(),
-        mapped_status.as_deref(),
+        mapped_status,
         limit,
         offset,
     )
