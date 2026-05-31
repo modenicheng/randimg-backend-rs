@@ -1,4 +1,45 @@
 use std::env;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+/// Parsed bind address — supports TCP and Unix socket formats.
+///
+/// Accepted formats:
+/// - `0.0.0.0:8000` / `127.0.0.1:8000` — plain TCP
+/// - `http://127.0.0.1:8000` — TCP (scheme is stripped)
+/// - `unix:///run/randimg.sock` — Unix domain socket
+#[derive(Clone, Debug)]
+pub enum BindAddr {
+    Tcp(SocketAddr),
+    Unix(PathBuf),
+}
+
+impl BindAddr {
+    pub fn parse(addr: &str) -> Self {
+        if let Some(path) = addr.strip_prefix("unix://") {
+            return BindAddr::Unix(PathBuf::from(path));
+        }
+
+        // Strip URL scheme if present
+        let addr = addr
+            .strip_prefix("http://")
+            .or_else(|| addr.strip_prefix("https://"))
+            .unwrap_or(addr);
+
+        match addr.parse::<SocketAddr>() {
+            Ok(sa) => BindAddr::Tcp(sa),
+            Err(_) => {
+                // Try hostname resolution (e.g. "localhost:8000")
+                use std::net::ToSocketAddrs;
+                addr.to_socket_addrs()
+                    .expect(&format!("Cannot resolve bind address '{}'", addr))
+                    .next()
+                    .map(BindAddr::Tcp)
+                    .expect(&format!("No addresses resolved for '{}'", addr))
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -7,7 +48,7 @@ pub struct AppConfig {
     pub jwt_expire_minutes: u64,
     pub cdn_base_url: String,
     pub image_dir: String,
-    pub server_addr: String,
+    pub server_addr: BindAddr,
     pub pixiv_refresh_token: String,
     pub pixiv_proxy: String,
     pub log_level: String,
@@ -39,8 +80,10 @@ impl AppConfig {
                 .unwrap_or_else(|_| "https://cdn.example.com/".into()),
             image_dir: env::var("IMAGE_DIR")
                 .unwrap_or_else(|_| "./images".into()),
-            server_addr: env::var("SERVER_ADDR")
-                .unwrap_or_else(|_| "0.0.0.0:8000".into()),
+            server_addr: BindAddr::parse(
+                &env::var("SERVER_ADDR")
+                    .unwrap_or_else(|_| "0.0.0.0:8000".into()),
+            ),
             pixiv_refresh_token: env::var("PIXIV_REFRESH_TOKEN")
                 .unwrap_or_default(),
             pixiv_proxy: env::var("PIXIV_PROXY")

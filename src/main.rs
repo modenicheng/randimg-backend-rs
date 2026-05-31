@@ -1,5 +1,6 @@
 use axum::Router;
-use randimg_backend_rs::{config::AppConfig, db, db::query, handlers, task_queue, AppState};
+use randimg_backend_rs::config::{AppConfig, BindAddr};
+use randimg_backend_rs::{db, db::query, handlers, task_queue, AppState};
 use std::sync::Arc;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
@@ -139,22 +140,40 @@ async fn main() {
         .layer(cors)
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(&config.server_addr)
-        .await
-        .unwrap();
-    let local_addr = listener.local_addr().unwrap();
-
-    tracing::info!(
-        address = %local_addr,
-        database = %config.database_url,
-        "Server started"
-    );
-
-    // --- Graceful shutdown on CTRL+C =========================================
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+    match &config.server_addr {
+        BindAddr::Tcp(addr) => {
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .unwrap();
+            tracing::info!(
+                address = %listener.local_addr().unwrap(),
+                database = %config.database_url,
+                "Server started (TCP)"
+            );
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+                .unwrap();
+        }
+        BindAddr::Unix(path) => {
+            // Remove stale socket file if it exists
+            if path.exists() {
+                std::fs::remove_file(path).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to remove stale socket {:?}: {}", path, e);
+                });
+            }
+            let listener = tokio::net::UnixListener::bind(path).unwrap();
+            tracing::info!(
+                socket = %path.display(),
+                database = %config.database_url,
+                "Server started (Unix socket)"
+            );
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+                .unwrap();
+        }
+    }
 
     tracing::info!("Shutting down — aborting background task runners…");
     for h in &runner_handles {
