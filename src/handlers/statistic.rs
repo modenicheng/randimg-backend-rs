@@ -1,9 +1,30 @@
+use axum::{extract::State, Json};
+use sea_orm::{EntityTrait, PaginatorTrait};
 use std::sync::Arc;
 
-use axum::extract::State;
-
+use crate::db::query;
+use crate::error::AppError;
 use crate::AppState;
 
-pub async fn get_statistic(State(_state): State<Arc<AppState>>) -> &'static str {
-    todo!("get_statistic handler")
+pub async fn get_statistic(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let illust_count = query::image::count_accessible(&state.db)
+        .await
+        .map_err(AppError::from)?;
+
+    let tag_count = crate::db::entities::tag::Entity::find()
+        .count(&state.db)
+        .await
+        .map_err(AppError::from)?;
+
+    let author_count = query::author::count(&state.db)
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(Json(serde_json::json!({
+        "illust_count": illust_count,
+        "tag_count": tag_count,
+        "author_count": author_count,
+    })))
 }
