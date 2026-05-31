@@ -1,15 +1,27 @@
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     response::{IntoResponse, Redirect, Response},
-    Json,
+    routing::get,
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::auth::middleware::{AuthUser, OptionalAuthUser};
 use crate::db::query::image;
 use crate::error::AppError;
-use crate::AppState;
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/", get(random_image))
+        .route(
+            "/image/{image_id}",
+            get(get_image).patch(patch_image).delete(delete_image),
+        )
+        .route("/list", get(list_images))
+        .route("/color/search", get(color_search))
+}
 
 #[derive(Deserialize)]
 pub struct ImageQuery {
@@ -44,7 +56,7 @@ pub struct ListQuery {
     pub height_floor: Option<i32>,
     pub height_ceil: Option<i32>,
     pub author: Option<String>,
-    pub accessable: Option<String>,
+    pub accessible: Option<String>,
     pub tags: Option<String>,
 }
 
@@ -165,8 +177,8 @@ pub async fn list_images(
         .map(|d| d.to_lowercase() == "true")
         .unwrap_or(true);
 
-    let accessable = if is_admin {
-        match query.accessable.as_deref() {
+    let accessible = if is_admin {
+        match query.accessible.as_deref() {
             Some("true") => Some(true),
             Some("false") => Some(false),
             _ => None,
@@ -175,12 +187,30 @@ pub async fn list_images(
         Some(true)
     };
 
+    let sort_by = query.sort_by.as_deref().unwrap_or("id");
+    let allowed_sorts = [
+        "id",
+        "width",
+        "height",
+        "aspect_ratio",
+        "source_created_at",
+        "created_at",
+        "popularity",
+    ];
+    if !allowed_sorts.contains(&sort_by) {
+        return Err(AppError::BadRequest(format!(
+            "Invalid sort_by '{}'. Allowed: {}",
+            sort_by,
+            allowed_sorts.join(", ")
+        )));
+    }
+
     let result = image::list_images(
         &state.db,
         offset,
         limit,
         desc,
-        query.sort_by.as_deref().unwrap_or("id"),
+        sort_by,
         query.ratio_floor.unwrap_or(0.0),
         query.ratio_ceil.unwrap_or(10.0),
         query.width_floor.unwrap_or(0),
@@ -188,7 +218,7 @@ pub async fn list_images(
         query.height_floor.unwrap_or(0),
         query.height_ceil.unwrap_or(i32::MAX),
         query.author.as_deref(),
-        accessable,
+        accessible,
         query.tags.as_deref(),
         is_admin,
         &state.config,
@@ -203,7 +233,7 @@ pub async fn list_images(
 pub struct UpdateImageRequest {
     pub id: Option<i32>,
     pub title: Option<String>,
-    pub accessable: Option<serde_json::Value>,
+    pub accessible: Option<serde_json::Value>,
     pub is_public: Option<bool>,
     pub avatar_available: Option<bool>,
     pub colors: Option<serde_json::Value>,
@@ -216,6 +246,33 @@ pub async fn patch_image(
     _auth: AuthUser,
     Json(body): Json<UpdateImageRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Validate accessible: must be boolean or null
+    if let Some(ref val) = body.accessible {
+        if !val.is_boolean() && !val.is_null() {
+            return Err(AppError::BadRequest(
+                "accessible must be a boolean or null".into(),
+            ));
+        }
+    }
+
+    // Validate colors: must be an object or array
+    if let Some(ref val) = body.colors {
+        if !val.is_object() && !val.is_array() {
+            return Err(AppError::BadRequest(
+                "colors must be a JSON object or array".into(),
+            ));
+        }
+    }
+
+    // Validate title: must not be empty string
+    if let Some(ref title) = body.title {
+        if title.is_empty() {
+            return Err(AppError::BadRequest(
+                "title must not be an empty string".into(),
+            ));
+        }
+    }
+
     let data = serde_json::to_value(&body).unwrap_or_default();
     let updated = image::update_fields(&state.db, image_id, data)
         .await
@@ -226,7 +283,7 @@ pub async fn patch_image(
     Ok(Json(serde_json::json!({
         "id": updated.id,
         "title": updated.title,
-        "accessable": updated.accessable,
+        "accessible": updated.accessible,
         "is_public": updated.is_public,
         "avatar_available": updated.avatar_available,
     })))
@@ -277,16 +334,9 @@ pub async fn color_search(
 
     let limit = query.limit.unwrap_or(20).min(100);
 
-    let results = image::color_search(
-        &state.db,
-        lab,
-        mode,
-        query.max_dist,
-        limit,
-        &state.config,
-    )
-    .await
-    .map_err(AppError::from)?;
+    let results = image::color_search(&state.db, lab, mode, query.max_dist, limit, &state.config)
+        .await
+        .map_err(AppError::from)?;
 
     Ok(Json(results))
 }
@@ -295,33 +345,35 @@ pub async fn delete_image(
     Path(image_id): Path<i32>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use crate::db::entities::image::Entity as ImageEntity;
-    use crate::db::entities::image_tag_association::{self, Entity as TagAssocEntity};
-    use crate::db::entities::image_color_palette::{self, Entity as PaletteEntity};
+    use chrono::Utc;
+    use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 
-    // Delete tag associations
-    TagAssocEntity::delete_many()
-        .filter(image_tag_association::Column::ImageId.eq(image_id))
-        .exec(&state.db)
+    let img = ImageEntity::find_by_id(image_id)
+        .one(&state.db)
         .await
         .map_err(AppError::from)?;
 
-    // Delete color palette entries
-    PaletteEntity::delete_many()
-        .filter(image_color_palette::Column::ImageId.eq(image_id))
-        .exec(&state.db)
-        .await
-        .map_err(AppError::from)?;
-
-    let result = ImageEntity::delete_by_id(image_id)
-        .exec(&state.db)
-        .await
-        .map_err(AppError::from)?;
-
-    if result.rows_affected == 0 {
+    let Some(img) = img else {
         return Err(AppError::NotFound("image not found".into()));
+    };
+
+    // Best-effort remove physical file from disk
+    let file_path = format!("{}/{}", state.config.image_dir, img.image_path);
+    match tokio::fs::remove_file(&file_path).await {
+        Ok(_) => {
+            tracing::info!("Deleted image file: {}", file_path);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to delete image file {}: {}", file_path, e);
+        }
     }
+
+    // Soft delete: set deleted_at and mark as not public
+    let mut active = img.into_active_model();
+    active.deleted_at = Set(Some(Utc::now().naive_utc()));
+    active.is_public = Set(false);
+    active.update(&state.db).await.map_err(AppError::from)?;
 
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }

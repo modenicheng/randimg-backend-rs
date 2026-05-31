@@ -1,9 +1,16 @@
-use sea_orm::*;
-use crate::db::entities::{
-    image::{self, Entity as Image},
-    author, tag, image_color_palette,
-};
 use crate::config::AppConfig;
+use crate::db::entities::{
+    author,
+    image::{self, Entity as Image},
+    image_color_palette, tag,
+};
+use sea_orm::*;
+use sea_orm::sea_query::Expr;
+
+/// Filter out soft-deleted images from a query.
+fn exclude_deleted(query: Select<Image>) -> Select<Image> {
+    query.filter(image::Column::DeletedAt.is_null())
+}
 
 /// Calculate popularity score from image fields.
 /// score = (V + B*3 + C*2) / (T_crawl_age_hours + 2)^1.8
@@ -33,7 +40,9 @@ pub async fn find_by_id(
     is_admin: bool,
     config: &AppConfig,
 ) -> Result<Option<serde_json::Value>, DbErr> {
-    let img = Image::find_by_id(image_id)
+    let img = Image::find()
+        .filter(image::Column::Id.eq(image_id))
+        .filter(image::Column::DeletedAt.is_null())
         .find_also_related(author::Entity)
         .one(db)
         .await?;
@@ -42,8 +51,8 @@ pub async fn find_by_id(
         return Ok(None);
     };
 
-    // Non-admin cannot see accessable=false images
-    if img.accessable == Some(false) && !is_admin {
+    // Non-admin cannot see accessible=false images
+    if img.accessible == Some(false) && !is_admin {
         return Ok(None);
     }
 
@@ -52,10 +61,7 @@ pub async fn find_by_id(
     };
 
     // Query associated tags
-    let tags: Vec<tag::Model> = img
-        .find_related(tag::Entity)
-        .all(db)
-        .await?;
+    let tags: Vec<tag::Model> = img.find_related(tag::Entity).all(db).await?;
 
     let tags_json: Vec<serde_json::Value> = tags
         .into_iter()
@@ -91,7 +97,10 @@ pub async fn find_by_id(
             "lab": [img.primary_l, img.primary_a, img.primary_b],
         }))
     } else {
-        img.colors.as_ref().and_then(|c| c.get("primary_color")).cloned()
+        img.colors
+            .as_ref()
+            .and_then(|c| c.get("primary_color"))
+            .cloned()
     };
 
     Ok(Some(serde_json::json!({
@@ -133,8 +142,9 @@ pub async fn random_image(
     tags: Option<&str>,
     config: &AppConfig,
 ) -> Result<Option<serde_json::Value>, DbErr> {
-    let mut query = Image::find()
+    let mut query = exclude_deleted(Image::find())
         .filter(image::Column::IsPublic.eq(true))
+        .filter(image::Column::Accessible.ne(Some(false)))
         .filter(image::Column::AspectRatio.gte(ratio_floor))
         .filter(image::Column::AspectRatio.lte(ratio_ceil))
         .filter(image::Column::Width.gte(width_floor))
@@ -157,19 +167,23 @@ pub async fn random_image(
     if let Some(tag_str) = tags {
         let tag_names: Vec<&str> = tag_str.split(',').collect();
         query = query
-            .join(JoinType::InnerJoin, image::Relation::ImageTagAssociation.def())
-            .join(JoinType::InnerJoin, crate::db::entities::image_tag_association::Relation::Tag.def())
+            .join(
+                JoinType::InnerJoin,
+                image::Relation::ImageTagAssociation.def(),
+            )
+            .join(
+                JoinType::InnerJoin,
+                crate::db::entities::image_tag_association::Relation::Tag.def(),
+            )
             .filter(
-                tag::Column::Name.is_in(tag_names.clone())
+                tag::Column::Name
+                    .is_in(tag_names.clone())
                     .or(tag::Column::TranslatedName.is_in(tag_names)),
             );
     }
 
-    // Use database-level random selection
-    let img = query
-        .order_by_asc(image::Column::Id)
-        .one(db)
-        .await?;
+    // Use database-level random selection (RANDOM() works on both SQLite and PostgreSQL)
+    let img = query.order_by_asc(Expr::cust("RANDOM()")).one(db).await?;
 
     let Some(img) = img else {
         return Ok(None);
@@ -192,12 +206,12 @@ pub async fn list_images(
     height_floor: i32,
     height_ceil: i32,
     author_filter: Option<&str>,
-    accessable: Option<bool>,
+    accessible: Option<bool>,
     tags: Option<&str>,
     is_admin: bool,
     config: &AppConfig,
 ) -> Result<Vec<serde_json::Value>, DbErr> {
-    let mut query = Image::find()
+    let mut query = exclude_deleted(Image::find())
         .find_also_related(author::Entity)
         .filter(image::Column::IsPublic.eq(true))
         .filter(image::Column::AspectRatio.gte(ratio_floor))
@@ -207,11 +221,11 @@ pub async fn list_images(
         .filter(image::Column::Height.gte(height_floor))
         .filter(image::Column::Height.lte(height_ceil));
 
-    // accessable filter (admin can override)
+    // accessible filter (admin can override)
     if !is_admin {
-        query = query.filter(image::Column::Accessable.ne(Some(false)));
-    } else if let Some(acc) = accessable {
-        query = query.filter(image::Column::Accessable.eq(acc));
+        query = query.filter(image::Column::Accessible.ne(Some(false)));
+    } else if let Some(acc) = accessible {
+        query = query.filter(image::Column::Accessible.eq(acc));
     }
 
     // author filter
@@ -227,10 +241,17 @@ pub async fn list_images(
     if let Some(tag_str) = tags {
         let tag_names: Vec<&str> = tag_str.split(',').collect();
         query = query
-            .join(JoinType::InnerJoin, image::Relation::ImageTagAssociation.def())
-            .join(JoinType::InnerJoin, crate::db::entities::image_tag_association::Relation::Tag.def())
+            .join(
+                JoinType::InnerJoin,
+                image::Relation::ImageTagAssociation.def(),
+            )
+            .join(
+                JoinType::InnerJoin,
+                crate::db::entities::image_tag_association::Relation::Tag.def(),
+            )
             .filter(
-                tag::Column::Name.is_in(tag_names.clone())
+                tag::Column::Name
+                    .is_in(tag_names.clone())
                     .or(tag::Column::TranslatedName.is_in(tag_names)),
             );
     }
@@ -322,7 +343,10 @@ pub async fn list_images(
                 "lab": [img.primary_l, img.primary_a, img.primary_b],
             }))
         } else {
-            img.colors.as_ref().and_then(|c| c.get("primary_color")).cloned()
+            img.colors
+                .as_ref()
+                .and_then(|c| c.get("primary_color"))
+                .cloned()
         };
 
         if is_admin {
@@ -335,7 +359,7 @@ pub async fn list_images(
                 "width": img.width,
                 "height": img.height,
                 "primary_color": primary_color,
-                "accessable": img.accessable,
+                "accessible": img.accessible,
                 "is_public": img.is_public,
                 "source_created_at": img.source_created_at,
                 "total_view": img.total_view,
@@ -368,30 +392,14 @@ pub async fn list_images(
     Ok(output)
 }
 
-/// Get unprocessed images (images with no completed color_extract task)
+/// Get unprocessed images (images that haven't been color-extracted yet).
+/// Checks `primary_l IS NULL` as the indicator of unprocessed status.
 pub async fn find_unprocessed(db: &DatabaseConnection) -> Result<Vec<image::Model>, DbErr> {
-    use crate::db::entities::task::{self, Entity as TaskEntity};
-
-    // Find image_ids that have a completed color_extract task
-    let completed_image_ids: Vec<i32> = TaskEntity::find()
-        .filter(task::Column::TaskType.eq("color_extract"))
-        .filter(task::Column::Status.eq("completed"))
-        .all(db)
-        .await?
-        .into_iter()
-        .filter_map(|t| t.image_id)
-        .collect();
-
-    // Find processed=true images that are NOT in completed list
-    let all_unprocessed = Image::find()
+    exclude_deleted(Image::find())
         .filter(image::Column::IsPublic.eq(false))
+        .filter(image::Column::PrimaryL.is_null())
         .all(db)
-        .await?
-        .into_iter()
-        .filter(|img| !completed_image_ids.contains(&img.id))
-        .collect();
-
-    Ok(all_unprocessed)
+        .await
 }
 
 /// Update image fields from JSON
@@ -408,11 +416,11 @@ pub async fn update_fields(
     if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
         active.title = Set(title.to_string());
     }
-    if let Some(accessable) = data.get("accessable") {
-        if accessable.is_null() {
-            active.accessable = Set(None);
-        } else if let Some(b) = accessable.as_bool() {
-            active.accessable = Set(Some(b));
+    if let Some(accessible) = data.get("accessible") {
+        if accessible.is_null() {
+            active.accessible = Set(None);
+        } else if let Some(b) = accessible.as_bool() {
+            active.accessible = Set(Some(b));
         }
     }
     if let Some(is_public) = data.get("is_public").and_then(|v| v.as_bool()) {
@@ -466,26 +474,22 @@ pub async fn find_discover_seeds(
     method: SeedMethod,
 ) -> Result<Vec<image::Model>, DbErr> {
     let base_query = || {
-        Image::find()
+        exclude_deleted(Image::find())
             .filter(image::Column::SourceId.is_not_null())
             .filter(image::Column::IsPublic.eq(true))
     };
 
     match method {
-        SeedMethod::Views => {
-            Ok(base_query()
-                .order_by_desc(image::Column::TotalView)
-                .limit(limit)
-                .all(db)
-                .await?)
-        }
-        SeedMethod::Bookmarks => {
-            Ok(base_query()
-                .order_by_desc(image::Column::TotalBookmarks)
-                .limit(limit)
-                .all(db)
-                .await?)
-        }
+        SeedMethod::Views => Ok(base_query()
+            .order_by_desc(image::Column::TotalView)
+            .limit(limit)
+            .all(db)
+            .await?),
+        SeedMethod::Bookmarks => Ok(base_query()
+            .order_by_desc(image::Column::TotalBookmarks)
+            .limit(limit)
+            .all(db)
+            .await?),
         SeedMethod::Random => {
             // Fetch a larger pool then shuffle in Rust (SQLite RANDOM() not portable via SeaORM)
             let pool = base_query().limit(limit * 5).all(db).await?;
@@ -497,8 +501,7 @@ pub async fn find_discover_seeds(
             }
             let seed = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as usize;
             for i in (1..len).rev() {
-                let j = seed.wrapping_mul(6364136223846793005).wrapping_add(i)
-                    % (i + 1);
+                let j = seed.wrapping_mul(6364136223846793005).wrapping_add(i) % (i + 1);
                 pool.swap(i, j);
             }
             pool.truncate(limit as usize);
@@ -527,8 +530,8 @@ pub async fn find_discover_seeds(
 
 /// Count accessible images
 pub async fn count_accessible(db: &DatabaseConnection) -> Result<u64, DbErr> {
-    Image::find()
-        .filter(image::Column::Accessable.eq(true))
+    exclude_deleted(Image::find())
+        .filter(image::Column::Accessible.eq(true))
         .count(db)
         .await
 }
@@ -589,7 +592,7 @@ pub async fn color_search(
     if mode == "primary" {
         // Search by primary color (stored on images table)
         // Pre-filter with bounding box, compute exact distance in Rust
-        let results = Image::find()
+        let results = exclude_deleted(Image::find())
             .filter(image::Column::IsPublic.eq(true))
             .filter(image::Column::PrimaryL.is_not_null())
             .filter(image::Column::PrimaryL.between(target_l - box_radius, target_l + box_radius))
@@ -642,9 +645,18 @@ pub async fn color_search(
 
         // Bounding box pre-filter on palette table
         let palette_results = PaletteEntity::find()
-            .filter(image_color_palette::Column::LabL.between(target_l - box_radius, target_l + box_radius))
-            .filter(image_color_palette::Column::LabA.between(target_a - box_radius, target_a + box_radius))
-            .filter(image_color_palette::Column::LabB.between(target_b - box_radius, target_b + box_radius))
+            .filter(
+                image_color_palette::Column::LabL
+                    .between(target_l - box_radius, target_l + box_radius),
+            )
+            .filter(
+                image_color_palette::Column::LabA
+                    .between(target_a - box_radius, target_a + box_radius),
+            )
+            .filter(
+                image_color_palette::Column::LabB
+                    .between(target_b - box_radius, target_b + box_radius),
+            )
             .all(db)
             .await?;
 
@@ -677,7 +689,7 @@ pub async fn color_search(
         let images: Vec<image::Model> = if image_ids.is_empty() {
             Vec::new()
         } else {
-            Image::find()
+            exclude_deleted(Image::find())
                 .filter(image::Column::Id.is_in(image_ids))
                 .all(db)
                 .await?

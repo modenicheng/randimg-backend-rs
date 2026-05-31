@@ -1,8 +1,8 @@
 use axum::{
-    extract::{FromRef, State},
-    extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
     RequestPartsExt,
+    extract::FromRequestParts,
+    extract::{FromRef, State},
+    http::{StatusCode, request::Parts},
 };
 use axum_extra::TypedHeader;
 use axum_extra::headers::{Authorization, authorization::Bearer};
@@ -56,10 +56,7 @@ where
     type Rejection = StatusCode;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let auth_header: Option<TypedHeader<Authorization<Bearer>>> = parts
-            .extract()
-            .await
-            .ok();
+        let auth_header: Option<TypedHeader<Authorization<Bearer>>> = parts.extract().await.ok();
 
         if let Some(TypedHeader(Authorization(bearer))) = auth_header {
             let State(state): State<Arc<AppState>> = parts

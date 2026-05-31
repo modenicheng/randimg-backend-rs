@@ -3,7 +3,10 @@ use std::time::Instant;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let image_path = args.get(1).map(|s| s.as_str()).unwrap_or("tests/assets/test_image.jpg");
+    let image_path = args
+        .get(1)
+        .map(|s| s.as_str())
+        .unwrap_or("tests/assets/test_image.jpg");
 
     println!("Loading image: {}", image_path);
     let img = image::open(image_path).expect("Failed to open image");
@@ -25,13 +28,28 @@ fn main() {
 
         if i == 0 {
             println!("\n=== Extraction Result (run 1) ===");
-            println!("  primary_color: RGB({},{},{})", result.primary_color[0], result.primary_color[1], result.primary_color[2]);
-            println!("  primary_lab:   L*{:.1} a*{:.1} b*{:.1}", result.primary_lab[0], result.primary_lab[1], result.primary_lab[2]);
+            println!(
+                "  primary_color: RGB({},{},{})",
+                result.primary_color[0], result.primary_color[1], result.primary_color[2]
+            );
+            println!(
+                "  primary_lab:   L*{:.1} a*{:.1} b*{:.1}",
+                result.primary_lab[0], result.primary_lab[1], result.primary_lab[2]
+            );
             println!("  palette ({} colors, sorted by L*):", result.colors.len());
-            for (j, (rgb, lab)) in result.colors.iter().zip(result.colors_lab.iter()).enumerate() {
+            for (j, (rgb, lab)) in result
+                .colors
+                .iter()
+                .zip(result.colors_lab.iter())
+                .enumerate()
+            {
                 let hex = format!("{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
-                let brightness = (rgb[0] as u32 * 299 + rgb[1] as u32 * 587 + rgb[2] as u32 * 114) / 1000;
-                println!("    [{:2}] #{} RGB({:3},{:3},{:3}) L*{:5.1} a*{:6.1} b*{:6.1} brightness={}", j, hex, rgb[0], rgb[1], rgb[2], lab[0], lab[1], lab[2], brightness);
+                let brightness =
+                    (rgb[0] as u32 * 299 + rgb[1] as u32 * 587 + rgb[2] as u32 * 114) / 1000;
+                println!(
+                    "    [{:2}] #{} RGB({:3},{:3},{:3}) L*{:5.1} a*{:6.1} b*{:6.1} brightness={}",
+                    j, hex, rgb[0], rgb[1], rgb[2], lab[0], lab[1], lab[2], brightness
+                );
             }
         }
     }
@@ -47,14 +65,24 @@ fn main() {
     let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
     let rgb = small.to_rgb8();
     let resize_elapsed = t0.elapsed();
-    println!("  resize ({}x{} -> {}x{}): {:?}", w, h, new_w, new_h, resize_elapsed);
+    println!(
+        "  resize ({}x{} -> {}x{}): {:?}",
+        w, h, new_w, new_h, resize_elapsed
+    );
 
     let pixels: Vec<[u8; 3]> = rgb.pixels().map(|p| [p[0], p[1], p[2]]).collect();
 
     let t1 = Instant::now();
-    let lab_pixels: Vec<[f64; 3]> = pixels.iter().map(|p| rgb_to_lab_fn(p[0], p[1], p[2])).collect();
+    let lab_pixels: Vec<[f64; 3]> = pixels
+        .iter()
+        .map(|p| rgb_to_lab_fn(p[0], p[1], p[2]))
+        .collect();
     let lab_elapsed = t1.elapsed();
-    println!("  RGB->LAB conversion ({} pixels): {:?}", lab_pixels.len(), lab_elapsed);
+    println!(
+        "  RGB->LAB conversion ({} pixels): {:?}",
+        lab_pixels.len(),
+        lab_elapsed
+    );
 
     let t2 = Instant::now();
     let _centroids = randimg_backend_rs::color::kmeans::kmeans(&lab_pixels, 10, 50, Some(2048));
@@ -90,7 +118,11 @@ fn main() {
 fn rgb_to_lab_fn(r: u8, g: u8, b: u8) -> [f64; 3] {
     let srgb_to_linear = |c: u8| -> f64 {
         let c = c as f64 / 255.0;
-        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
     };
     let r_lin = srgb_to_linear(r);
     let g_lin = srgb_to_linear(g);
@@ -100,7 +132,11 @@ fn rgb_to_lab_fn(r: u8, g: u8, b: u8) -> [f64; 3] {
     let z = r_lin * 0.0193339 + g_lin * 0.1191920 + b_lin * 0.9503041;
     let f = |t: f64| -> f64 {
         const DELTA: f64 = 6.0 / 29.0;
-        if t > DELTA.powi(3) { t.powf(1.0 / 3.0) } else { t / (3.0 * DELTA * DELTA) + 4.0 / 29.0 }
+        if t > DELTA.powi(3) {
+            t.powf(1.0 / 3.0)
+        } else {
+            t / (3.0 * DELTA * DELTA) + 4.0 / 29.0
+        }
     };
     let fx = f(x / 0.95047);
     let fy = f(y);
@@ -117,7 +153,10 @@ fn histogram_primary_color_fn(pixels: &[[u8; 3]], levels: u8) -> [u8; 3] {
         let key = [quantize(p[0]), quantize(p[1]), quantize(p[2])];
         *hist.entry(key).or_insert(0) += 1;
     }
-    hist.into_iter().max_by_key(|(_, count)| *count).map(|(color, _)| color).unwrap_or([0, 0, 0])
+    hist.into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(color, _)| color)
+        .unwrap_or([0, 0, 0])
 }
 
 fn generate_html(
@@ -134,7 +173,8 @@ fn generate_html(
         .enumerate()
         .map(|(i, c)| {
             let hex = format!("{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
-            let brightness = (c[0] as f64 * 0.299 + c[1] as f64 * 0.587 + c[2] as f64 * 0.114) as u32;
+            let brightness =
+                (c[0] as f64 * 0.299 + c[1] as f64 * 0.587 + c[2] as f64 * 0.114) as u32;
             let text_color = if brightness > 128 { "#000" } else { "#fff" };
             let lab = rgb_to_lab_display(c[0], c[1], c[2]);
             format!(
@@ -144,8 +184,7 @@ fn generate_html(
                     <div class="rgb">RGB({},{},{})</div>
                     <div class="lab">L*{:.1} a*{:.1} b*{:.1}</div>
                 </div>"#,
-                i, c[0], c[1], c[2],
-                lab[0], lab[1], lab[2],
+                i, c[0], c[1], c[2], lab[0], lab[1], lab[2],
             )
         })
         .collect();
@@ -153,12 +192,19 @@ fn generate_html(
     let durations_str: String = durations
         .iter()
         .enumerate()
-        .map(|(i, d)| format!("<tr><td>{}</td><td>{:.2} ms</td></tr>", i + 1, d.as_secs_f64() * 1000.0))
+        .map(|(i, d)| {
+            format!(
+                "<tr><td>{}</td><td>{:.2} ms</td></tr>",
+                i + 1,
+                d.as_secs_f64() * 1000.0
+            )
+        })
         .collect();
 
     let min = durations.iter().min().unwrap();
     let max = durations.iter().max().unwrap();
-    let mean_ms = durations.iter().sum::<std::time::Duration>().as_secs_f64() * 1000.0 / durations.len() as f64;
+    let mean_ms = durations.iter().sum::<std::time::Duration>().as_secs_f64() * 1000.0
+        / durations.len() as f64;
 
     let image_name = std::path::Path::new(image_path)
         .file_name()
@@ -246,8 +292,17 @@ fn generate_html(
 "#,
         image_name = image_name,
         primary_hex = primary_hex,
-        primary_text = if (primary[0] as u32 * 299 + primary[1] as u32 * 587 + primary[2] as u32 * 114) / 1000 > 128 { "#000" } else { "#fff" },
-        pr = primary[0], pg = primary[1], pb = primary[2],
+        primary_text =
+            if (primary[0] as u32 * 299 + primary[1] as u32 * 587 + primary[2] as u32 * 114) / 1000
+                > 128
+            {
+                "#000"
+            } else {
+                "#fff"
+            },
+        pr = primary[0],
+        pg = primary[1],
+        pb = primary[2],
         palette_cells = palette_cells,
         min_ms = min.as_secs_f64() * 1000.0,
         max_ms = max.as_secs_f64() * 1000.0,
@@ -259,7 +314,11 @@ fn generate_html(
 fn rgb_to_lab_display(r: u8, g: u8, b: u8) -> [f64; 3] {
     let srgb_to_linear = |c: u8| -> f64 {
         let c = c as f64 / 255.0;
-        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
     };
     let r_lin = srgb_to_linear(r);
     let g_lin = srgb_to_linear(g);
@@ -269,7 +328,11 @@ fn rgb_to_lab_display(r: u8, g: u8, b: u8) -> [f64; 3] {
     let z = r_lin * 0.0193339 + g_lin * 0.1191920 + b_lin * 0.9503041;
     let f = |t: f64| -> f64 {
         const DELTA: f64 = 6.0 / 29.0;
-        if t > DELTA.powi(3) { t.powf(1.0 / 3.0) } else { t / (3.0 * DELTA * DELTA) + 4.0 / 29.0 }
+        if t > DELTA.powi(3) {
+            t.powf(1.0 / 3.0)
+        } else {
+            t / (3.0 * DELTA * DELTA) + 4.0 / 29.0
+        }
     };
     let fx = f(x / 0.95047);
     let fy = f(y);

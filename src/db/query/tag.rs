@@ -1,8 +1,19 @@
-use sea_orm::*;
 use crate::db::entities::tag::{self, Entity as Tag};
+use sea_orm::*;
 
-pub async fn find_all(db: &DatabaseConnection) -> Result<Vec<tag::Model>, DbErr> {
-    Tag::find().all(db).await
+pub async fn find_all(
+    db: &DatabaseConnection,
+    limit: Option<u64>,
+    offset: Option<u64>,
+) -> Result<Vec<tag::Model>, DbErr> {
+    let mut query = Tag::find().order_by_asc(tag::Column::Id);
+    if let Some(l) = limit {
+        query = query.limit(l);
+    }
+    if let Some(o) = offset {
+        query = query.offset(o);
+    }
+    query.all(db).await
 }
 
 pub async fn find_or_create(
@@ -23,4 +34,17 @@ pub async fn find_or_create(
         ..Default::default()
     };
     model.insert(db).await
+}
+
+pub async fn update_tag(
+    db: &DatabaseConnection,
+    tag_id: i32,
+    translated_name: Option<&str>,
+) -> Result<Option<tag::Model>, DbErr> {
+    let t = Tag::find_by_id(tag_id).one(db).await?;
+    let Some(t) = t else { return Ok(None) };
+    let mut active: tag::ActiveModel = t.into();
+    active.translated_name = Set(translated_name.map(|s| s.to_string()));
+    let updated = active.update(db).await?;
+    Ok(Some(updated))
 }

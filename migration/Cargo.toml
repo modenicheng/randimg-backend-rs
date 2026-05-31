@@ -3,9 +3,12 @@ name = "migration"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["sqlite"]
+sqlite = ["sea-orm-migration/sqlx-sqlite"]
+postgres = ["sea-orm-migration/sqlx-postgres"]
+
 [dependencies]
 sea-orm-migration = { version = "1", features = [
     "runtime-tokio-rustls",
-    "sqlx-sqlite",
-    "sqlx-postgres",
 ] }

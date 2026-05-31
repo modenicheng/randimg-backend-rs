@@ -1,5 +1,5 @@
-use sea_orm::*;
 use crate::db::entities::author::{self, Entity as Author};
+use sea_orm::*;
 
 pub async fn find_or_create(
     db: &DatabaseConnection,
@@ -39,4 +39,26 @@ pub async fn find_or_create(
 
 pub async fn count(db: &DatabaseConnection) -> Result<u64, DbErr> {
     Author::find().count(db).await
+}
+
+pub async fn find_all(
+    db: &DatabaseConnection,
+    limit: Option<u64>,
+    offset: Option<u64>,
+) -> Result<Vec<author::Model>, DbErr> {
+    let mut query = Author::find().order_by_asc(author::Column::Id);
+    if let Some(l) = limit {
+        query = query.limit(l);
+    }
+    if let Some(o) = offset {
+        query = query.offset(o);
+    }
+    query.all(db).await
+}
+
+pub async fn find_by_id(
+    db: &DatabaseConnection,
+    author_id: i32,
+) -> Result<Option<author::Model>, DbErr> {
+    Author::find_by_id(author_id).one(db).await
 }

@@ -4,5 +4,5 @@ pub mod crawler;
 pub mod image;
 pub mod image_color_palette;
 pub mod image_tag_association;
+pub mod pixiv_credential;
 pub mod tag;
-pub mod task;

@@ -291,7 +291,12 @@ fn update_centroids(
             centroids[j] = [sums[j][0] / n, sums[j][1] / n, sums[j][2] / n];
         }
     }
-    reinitialize_empty_centroids(centroids, &counts.iter().map(|&c| c as u64).collect::<Vec<_>>(), data, assignments);
+    reinitialize_empty_centroids(
+        centroids,
+        &counts.iter().map(|&c| c as u64).collect::<Vec<_>>(),
+        data,
+        assignments,
+    );
 }
 
 /// Reinitialize empty centroids to the farthest point from any existing centroid.
