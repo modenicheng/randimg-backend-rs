@@ -3,4 +3,5 @@ pub mod color_extract;
 pub mod crawl;
 pub mod discover;
 pub mod download;
+pub mod refresh_pixiv_token;
 pub mod upload;

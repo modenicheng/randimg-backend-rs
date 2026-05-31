@@ -5,6 +5,7 @@ mod m20260531_000002_schema_refactor;
 mod m20260531_000003_color_palette;
 mod m20260531_000004_rename_accessible;
 mod m20260531_000005_add_deleted_at;
+mod m20260531_000006_create_pixiv_credentials;
 
 pub struct Migrator;
 
@@ -17,6 +18,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260531_000003_color_palette::Migration),
             Box::new(m20260531_000004_rename_accessible::Migration),
             Box::new(m20260531_000005_add_deleted_at::Migration),
+            Box::new(m20260531_000006_create_pixiv_credentials::Migration),
         ]
     }
 }

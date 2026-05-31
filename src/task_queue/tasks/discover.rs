@@ -32,12 +32,20 @@ pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
 
     tracing::info!(count = seeds.len(), "Selected discover seeds");
 
-    // 2. Create and authenticate Pixiv API
+    // 2. Create and authenticate Pixiv API using a random active credential from DB
     let api = crate::pixiv::create_api(&state.config.pixiv_proxy);
-    if !state.config.pixiv_refresh_token.is_empty() {
-        api.auth(&state.config.pixiv_refresh_token)
+    if let Some(cred) = query::pixiv_credential::find_one_active_random(&state.db)
+        .await
+        .map_err(|e| format!("Failed to fetch credential: {}", e))?
+    {
+        api.auth(&cred.refresh_token)
             .await
             .map_err(|e| format!("Pixiv auth failed: {}", e))?;
+        // Persist possibly-rotated token
+        if let Some(new_token) = api.current_refresh_token().await {
+            let _ = query::pixiv_credential::update_token(&state.db, cred.id, &new_token, None).await;
+        }
+        let _ = query::pixiv_credential::touch_last_used(&state.db, cred.id).await;
     }
 
     // 3. For each seed, fetch related illusts and save them

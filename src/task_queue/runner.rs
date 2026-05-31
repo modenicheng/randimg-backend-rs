@@ -15,6 +15,7 @@ pub fn start_runner(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
         "upload",
         "crawl",
         "accessibility_check",
+        "refresh_pixiv_token",
     ];
 
     task_types
@@ -35,6 +36,7 @@ pub fn start_runner(state: Arc<AppState>) -> Vec<JoinHandle<()>> {
                             "upload" => tasks::upload::run(&state, &task).await,
                             "crawl" => tasks::crawl::run(&state, &task).await,
                             "accessibility_check" => tasks::accessibility_check::run(&state, &task).await,
+                            "refresh_pixiv_token" => tasks::refresh_pixiv_token::run(&state, &task).await,
                             _ => Ok(()),
                         };
 

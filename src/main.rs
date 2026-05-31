@@ -1,5 +1,5 @@
 use axum::Router;
-use randimg_backend_rs::{config::AppConfig, db, handlers, task_queue, AppState};
+use randimg_backend_rs::{config::AppConfig, db, db::query, handlers, task_queue, AppState};
 use std::sync::Arc;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
@@ -58,10 +58,63 @@ async fn main() {
 
     let db = db::init_database(&config.database_url).await;
 
+    let oss = randimg_backend_rs::dogecloud::DogeCloudOss::new(
+        config.dogecloud_access_key.clone(),
+        config.dogecloud_secret_key.clone(),
+    );
+
     let state = Arc::new(AppState {
         db,
         config: config.clone(),
+        oss,
     });
+
+    // --- Pixiv credential seed & auto-refresh ----------------------------------
+    // Seed from env var if DB has no credentials yet
+    if !config.pixiv_refresh_token.is_empty() {
+        let existing = query::pixiv_credential::find_all(&state.db).await.unwrap_or_default();
+        if existing.is_empty() {
+            match query::pixiv_credential::create(
+                &state.db,
+                "env_default",
+                &config.pixiv_refresh_token,
+                Some("Seeded from PIXIV_REFRESH_TOKEN env var"),
+            )
+            .await
+            {
+                Ok(cred) => {
+                    tracing::info!(cred_id = cred.id, "Seeded Pixiv credential from env var");
+                }
+                Err(e) => {
+                    tracing::error!("Failed to seed Pixiv credential: {}", e);
+                }
+            }
+        }
+    }
+
+    // Submit a refresh task for every active credential
+    match query::pixiv_credential::find_all(&state.db).await {
+        Ok(creds) => {
+            for cred in creds.iter().filter(|c| c.status == 0) {
+                if let Err(e) = task_queue::submit_task(
+                    &state.db,
+                    "refresh_pixiv_token",
+                    serde_json::json!({ "credential_id": cred.id }),
+                    5,
+                )
+                .await
+                {
+                    tracing::error!(
+                        cred_id = cred.id,
+                        "Failed to submit refresh task: {}", e
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to list credentials for auto-refresh: {}", e);
+        }
+    }
 
     // --- Task runners --------------------------------------------------------
     let runner_handles = task_queue::runner::start_runner(state.clone());
@@ -80,6 +133,7 @@ async fn main() {
         .merge(handlers::author::routes())
         .merge(handlers::crawler::routes())
         .merge(handlers::task::routes())
+        .merge(handlers::pixiv_credential::routes())
         .nest_service("/images", ServeDir::new(&config.image_dir))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
