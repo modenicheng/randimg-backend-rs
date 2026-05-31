@@ -53,6 +53,23 @@ pub async fn create_crawler(
     .await
     .map_err(AppError::from)?;
 
+    // Submit crawl task to background queue
+    crate::task_queue::submit_task(
+        &state.db,
+        "crawl",
+        serde_json::json!({
+            "crawler_id": crawler.id,
+            "crawl_type": crawl_type,
+            "target_user_id": body.target_user_id,
+            "target_start_date": body.target_start_date.map(|d| d.to_string()),
+            "target_end_date": body.target_end_date.map(|d| d.to_string()),
+            "target_search_prompt": body.target_search_prompt,
+        }),
+        1, // Higher priority than download/color tasks
+    )
+    .await
+    .map_err(AppError::from)?;
+
     Ok(Json(serde_json::json!({
         "id": crawler.id,
         "task_name": crawler.task_name,

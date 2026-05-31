@@ -1,6 +1,5 @@
 use crate::AppState;
 use crate::db::entities::task;
-use crate::pixiv::{DownloadManager, resolve_download_tasks};
 use sea_orm::*;
 
 pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
