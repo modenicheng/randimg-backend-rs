@@ -150,32 +150,10 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // background_tasks (new - replaces in-memory deque)
-        manager
-            .create_table(
-                Table::create()
-                    .table(BackgroundTasks::Table)
-                    .if_not_exists()
-                    .col(ColumnDef::new(BackgroundTasks::Id).string().not_null().primary_key())
-                    .col(ColumnDef::new(BackgroundTasks::TaskType).string().not_null())
-                    .col(ColumnDef::new(BackgroundTasks::Payload).json().not_null())
-                    .col(ColumnDef::new(BackgroundTasks::Status).string().not_null().default("pending"))
-                    .col(ColumnDef::new(BackgroundTasks::Priority).integer().not_null().default(0))
-                    .col(ColumnDef::new(BackgroundTasks::RetryCount).integer().not_null().default(0))
-                    .col(ColumnDef::new(BackgroundTasks::MaxRetries).integer().not_null().default(3))
-                    .col(ColumnDef::new(BackgroundTasks::CreatedAt).date_time().not_null())
-                    .col(ColumnDef::new(BackgroundTasks::StartedAt).date_time())
-                    .col(ColumnDef::new(BackgroundTasks::FinishedAt).date_time())
-                    .col(ColumnDef::new(BackgroundTasks::LastError).string())
-                    .to_owned(),
-            )
-            .await?;
-
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(BackgroundTasks::Table).to_owned()).await?;
         manager.drop_table(Table::drop().table(Crawlers::Table).to_owned()).await?;
         manager.drop_table(Table::drop().table(Admins::Table).to_owned()).await?;
         manager.drop_table(Table::drop().table(ImageTagAssociation::Table).to_owned()).await?;
@@ -220,8 +198,3 @@ enum Crawlers {
     TargetEndDate, TargetSearchPrompt,
 }
 
-#[derive(DeriveIden)]
-enum BackgroundTasks {
-    Table, Id, TaskType, Payload, Status, Priority,
-    RetryCount, MaxRetries, CreatedAt, StartedAt, FinishedAt, LastError,
-}
