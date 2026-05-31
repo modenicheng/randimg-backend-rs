@@ -3,6 +3,11 @@ name = "randimg-backend-rs"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["sqlite"]
+sqlite = ["dep:apalis-sqlite", "sqlx/sqlite", "migration/sqlite", "sea-orm/sqlx-sqlite"]
+postgres = ["dep:apalis-postgres", "sqlx/postgres", "migration/postgres", "sea-orm/sqlx-postgres"]
+
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
@@ -13,12 +18,13 @@ tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 tokio = { version = "1", features = ["full"] }
 
 # Database
-sea-orm = { version = "1", features = [
+sea-orm = { version = "1", default-features = false, features = [
     "runtime-tokio-rustls",
-    "sqlx-sqlite",
-    "sqlx-postgres",
     "with-json",
     "with-chrono",
+    "with-rust_decimal",
+    "with-bigdecimal",
+    "with-uuid",
     "macros",
 ] }
 
@@ -35,7 +41,8 @@ axum-extra = { version = "0.10", features = ["typed-header"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # Migration
-migration = { path = "migration" }
+migration = { path = "migration", default-features = false }
+
 
 # Image processing
 image = "0.25"
@@ -58,11 +65,12 @@ rayon = "1.12.0"
 
 # Background job queue
 apalis = { version = "1.0.0-rc.9", features = ["retry", "tracing"] }
-apalis-sqlite = { version = "1.0.0-rc.8", default-features = false, features = ["tokio-comp", "migrate", "json", "chrono"] }
+apalis-sqlite = { version = "1.0.0-rc.8", default-features = false, features = ["tokio-comp", "migrate", "json", "chrono"], optional = true }
+apalis-postgres = { version = "1.0.0-rc.8", default-features = false, features = ["tokio-comp", "migrate", "chrono"], optional = true }
 apalis-codec = { version = "0.1.0-rc.9", features = ["json"] }
 
 # Direct sqlx for querying Apalis Jobs table
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls"] }
 
 # DogeCloud OSS (AWS S3 compatible)
 aws-config = { version = "1", features = ["behavior-version-latest"] }
