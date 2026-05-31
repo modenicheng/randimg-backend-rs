@@ -6,7 +6,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::auth::middleware::OptionalAuthUser;
+use crate::auth::middleware::{AuthUser, OptionalAuthUser};
 use crate::db::query::image;
 use crate::error::AppError;
 use crate::AppState;
@@ -165,4 +165,60 @@ pub async fn list_images(
     .map_err(AppError::from)?;
 
     Ok(Json(result))
+}
+
+#[derive(Deserialize, serde::Serialize)]
+pub struct UpdateImageRequest {
+    pub id: Option<i32>,
+    pub title: Option<String>,
+    pub accessable: Option<serde_json::Value>,
+    pub processed: Option<bool>,
+    pub processing: Option<bool>,
+    pub downloaded: Option<bool>,
+    pub uploaded: Option<bool>,
+    pub colors: Option<serde_json::Value>,
+}
+
+/// PATCH /image/{image_id}
+pub async fn patch_image(
+    State(state): State<Arc<AppState>>,
+    Path(image_id): Path<i32>,
+    _auth: AuthUser,
+    Json(body): Json<UpdateImageRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let data = serde_json::to_value(&body).unwrap_or_default();
+    let updated = image::update_fields(&state.db, image_id, data)
+        .await
+        .map_err(AppError::from)?;
+
+    let updated = updated.ok_or(AppError::NotFound("image not found".into()))?;
+
+    Ok(Json(serde_json::json!({
+        "id": updated.id,
+        "title": updated.title,
+        "accessable": updated.accessable,
+        "processed": updated.processed,
+        "processing": updated.processing,
+    })))
+}
+
+/// DELETE /image/{image_id}
+pub async fn delete_image(
+    State(state): State<Arc<AppState>>,
+    Path(image_id): Path<i32>,
+    _auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use sea_orm::EntityTrait;
+    use crate::db::entities::image::Entity as ImageEntity;
+
+    let result = ImageEntity::delete_by_id(image_id)
+        .exec(&state.db)
+        .await
+        .map_err(AppError::from)?;
+
+    if result.rows_affected == 0 {
+        return Err(AppError::NotFound("image not found".into()));
+    }
+
+    Ok(Json(serde_json::json!({ "status": "ok" })))
 }

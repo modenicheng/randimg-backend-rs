@@ -42,7 +42,12 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(handlers::image::random_image))
-        .route("/image/{image_id}", get(handlers::image::get_image))
+        .route(
+            "/image/{image_id}",
+            get(handlers::image::get_image)
+                .patch(handlers::image::patch_image)
+                .delete(handlers::image::delete_image),
+        )
         .route("/list", get(handlers::image::list_images))
         .route("/tags", get(handlers::tag::get_tags))
         .route("/statistic", get(handlers::statistic::get_statistic))
