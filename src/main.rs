@@ -35,6 +35,9 @@ async fn main() {
         config: config.clone(),
     });
 
+    // Start background task runner
+    task_queue::runner::start_runner(state.clone()).await;
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -56,6 +59,12 @@ async fn main() {
             "/crawler",
             get(handlers::crawler::list_crawlers).post(handlers::crawler::create_crawler),
         )
+        .route(
+            "/crawler/image",
+            get(handlers::crawler::get_crawler_image)
+                .post(handlers::crawler::error_crawler_image),
+        )
+        .route("/adjust-accessible", get(handlers::crawler::get_adjust_accessible))
         .layer(cors)
         .with_state(state);
 

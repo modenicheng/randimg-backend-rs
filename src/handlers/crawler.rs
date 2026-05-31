@@ -1,10 +1,12 @@
-use axum::{extract::State, Json};
+use axum::{extract::Query, extract::State, Json};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::auth::middleware::AuthUser;
+use crate::db::entities::image::{self, Entity as Image};
 use crate::db::query;
 use crate::error::AppError;
+use crate::task_queue;
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -85,4 +87,139 @@ pub async fn list_crawlers(
         .collect();
 
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct CrawlerImageQuery {
+    pub init: Option<bool>,
+}
+
+/// GET /crawler/image  Get images for processing
+pub async fn get_crawler_image(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Query(query): Query<CrawlerImageQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if query.init.unwrap_or(false) {
+        let images = query::image::find_unprocessed(&state.db)
+            .await
+            .map_err(AppError::from)?;
+
+        let count = images.len();
+        for img in images {
+            task_queue::submit_task(
+                &state.db,
+                "color_extract",
+                serde_json::json!({
+                    "image_id": img.id,
+                    "image_path": img.image_path,
+                }),
+                0,
+            )
+            .await
+            .map_err(AppError::from)?;
+        }
+
+        return Ok(Json(serde_json::json!({
+            "status": "ok",
+            "count": count,
+        })));
+    }
+
+    let task = task_queue::claim_next_task(&state.db, "color_extract")
+        .await
+        .map_err(AppError::from)?;
+
+    match task {
+        Some(t) => {
+            if let Some(image_id) = t.payload["image_id"].as_i64() {
+                query::image::update_fields(
+                    &state.db,
+                    image_id as i32,
+                    serde_json::json!({ "processing": true }),
+                )
+                .await
+                .map_err(AppError::from)?;
+            }
+            Ok(Json(serde_json::json!({
+                "id": t.payload["image_id"],
+                "image_path": t.payload["image_path"],
+                "task_id": t.id,
+            })))
+        }
+        None => Err(AppError::NotFound(
+            "No image found. Please try init first.".into(),
+        )),
+    }
+}
+
+/// POST /crawler/image  Error callback
+pub async fn error_crawler_image(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if let Some(task_id) = body["task_id"].as_str() {
+        task_queue::fail_task(&state.db, task_id, "requeued by worker")
+            .await
+            .map_err(AppError::from)?;
+    }
+
+    if let Some(image_id) = body["id"].as_i64() {
+        query::image::update_fields(&state.db, image_id as i32, body)
+            .await
+            .map_err(AppError::from)?;
+    }
+
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// GET /adjust-accessible  Get images for accessibility check
+pub async fn get_adjust_accessible(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Query(query): Query<CrawlerImageQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if query.init.unwrap_or(false) {
+        use sea_orm::*;
+        let images = Image::find()
+            .filter(image::Column::Downloaded.eq(true))
+            .filter(image::Column::Accessable.is_null())
+            .all(&state.db)
+            .await
+            .map_err(AppError::from)?;
+
+        let count = images.len();
+        for img in images {
+            task_queue::submit_task(
+                &state.db,
+                "accessibility_check",
+                serde_json::json!({
+                    "image_id": img.id,
+                    "image_path": img.image_path,
+                }),
+                0,
+            )
+            .await
+            .map_err(AppError::from)?;
+        }
+
+        return Ok(Json(serde_json::json!({
+            "status": "ok",
+            "count": count,
+        })));
+    }
+
+    let task = task_queue::claim_next_task(&state.db, "accessibility_check")
+        .await
+        .map_err(AppError::from)?;
+
+    match task {
+        Some(t) => Ok(Json(serde_json::json!({
+            "id": t.payload["image_id"],
+            "image_path": t.payload["image_path"],
+            "task_id": t.id,
+        }))),
+        None => Err(AppError::NotFound("Queue empty".into())),
+    }
 }
