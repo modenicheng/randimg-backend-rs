@@ -21,7 +21,7 @@ pub struct Model {
     pub primary_l: Option<f64>,
     pub primary_a: Option<f64>,
     pub primary_b: Option<f64>,
-    pub accessable: Option<bool>,
+    pub accessible: Option<bool>,
     pub avatar_available: Option<bool>,
     pub is_public: bool,
     pub source_created_at: Option<NaiveDateTime>,
@@ -33,6 +33,7 @@ pub struct Model {
     pub total_comments: i64,
     pub fetched_times: i32,
     pub created_at: NaiveDateTime,
+    pub deleted_at: Option<NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

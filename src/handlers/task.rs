@@ -12,6 +12,7 @@ pub struct ListTasksQuery {
     pub task_type: Option<String>,
     pub status: Option<String>,
     pub limit: Option<u64>,
+    pub offset: Option<u64>,
 }
 
 /// GET /tasks — List background tasks with optional filters
@@ -21,11 +22,13 @@ pub async fn list_tasks(
     Query(q): Query<ListTasksQuery>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     let limit = q.limit.unwrap_or(50).min(200);
+    let offset = q.offset.unwrap_or(0);
     let tasks = query::task::find_filtered(
         &state.db,
         q.task_type.as_deref(),
         q.status.as_deref(),
         limit,
+        offset,
     )
     .await
     .map_err(AppError::from)?;

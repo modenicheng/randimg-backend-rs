@@ -5,6 +5,11 @@ use crate::db::entities::{
 };
 use crate::config::AppConfig;
 
+/// Filter out soft-deleted images from a query.
+fn exclude_deleted(query: Select<Image>) -> Select<Image> {
+    query.filter(image::Column::DeletedAt.is_null())
+}
+
 /// Calculate popularity score from image fields.
 /// score = (V + B*3 + C*2) / (T_crawl_age_hours + 2)^1.8
 /// T_crawl_age = created_at - source_created_at (hours)
@@ -33,7 +38,9 @@ pub async fn find_by_id(
     is_admin: bool,
     config: &AppConfig,
 ) -> Result<Option<serde_json::Value>, DbErr> {
-    let img = Image::find_by_id(image_id)
+    let img = Image::find()
+        .filter(image::Column::Id.eq(image_id))
+        .filter(image::Column::DeletedAt.is_null())
         .find_also_related(author::Entity)
         .one(db)
         .await?;
@@ -42,8 +49,8 @@ pub async fn find_by_id(
         return Ok(None);
     };
 
-    // Non-admin cannot see accessable=false images
-    if img.accessable == Some(false) && !is_admin {
+    // Non-admin cannot see accessible=false images
+    if img.accessible == Some(false) && !is_admin {
         return Ok(None);
     }
 
@@ -133,7 +140,7 @@ pub async fn random_image(
     tags: Option<&str>,
     config: &AppConfig,
 ) -> Result<Option<serde_json::Value>, DbErr> {
-    let mut query = Image::find()
+    let mut query = exclude_deleted(Image::find())
         .filter(image::Column::IsPublic.eq(true))
         .filter(image::Column::AspectRatio.gte(ratio_floor))
         .filter(image::Column::AspectRatio.lte(ratio_ceil))
@@ -192,12 +199,12 @@ pub async fn list_images(
     height_floor: i32,
     height_ceil: i32,
     author_filter: Option<&str>,
-    accessable: Option<bool>,
+    accessible: Option<bool>,
     tags: Option<&str>,
     is_admin: bool,
     config: &AppConfig,
 ) -> Result<Vec<serde_json::Value>, DbErr> {
-    let mut query = Image::find()
+    let mut query = exclude_deleted(Image::find())
         .find_also_related(author::Entity)
         .filter(image::Column::IsPublic.eq(true))
         .filter(image::Column::AspectRatio.gte(ratio_floor))
@@ -207,11 +214,11 @@ pub async fn list_images(
         .filter(image::Column::Height.gte(height_floor))
         .filter(image::Column::Height.lte(height_ceil));
 
-    // accessable filter (admin can override)
+    // accessible filter (admin can override)
     if !is_admin {
-        query = query.filter(image::Column::Accessable.ne(Some(false)));
-    } else if let Some(acc) = accessable {
-        query = query.filter(image::Column::Accessable.eq(acc));
+        query = query.filter(image::Column::Accessible.ne(Some(false)));
+    } else if let Some(acc) = accessible {
+        query = query.filter(image::Column::Accessible.eq(acc));
     }
 
     // author filter
@@ -335,7 +342,7 @@ pub async fn list_images(
                 "width": img.width,
                 "height": img.height,
                 "primary_color": primary_color,
-                "accessable": img.accessable,
+                "accessible": img.accessible,
                 "is_public": img.is_public,
                 "source_created_at": img.source_created_at,
                 "total_view": img.total_view,
@@ -383,7 +390,7 @@ pub async fn find_unprocessed(db: &DatabaseConnection) -> Result<Vec<image::Mode
         .collect();
 
     // Find processed=true images that are NOT in completed list
-    let all_unprocessed = Image::find()
+    let all_unprocessed = exclude_deleted(Image::find())
         .filter(image::Column::IsPublic.eq(false))
         .all(db)
         .await?
@@ -408,11 +415,11 @@ pub async fn update_fields(
     if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
         active.title = Set(title.to_string());
     }
-    if let Some(accessable) = data.get("accessable") {
-        if accessable.is_null() {
-            active.accessable = Set(None);
-        } else if let Some(b) = accessable.as_bool() {
-            active.accessable = Set(Some(b));
+    if let Some(accessible) = data.get("accessible") {
+        if accessible.is_null() {
+            active.accessible = Set(None);
+        } else if let Some(b) = accessible.as_bool() {
+            active.accessible = Set(Some(b));
         }
     }
     if let Some(is_public) = data.get("is_public").and_then(|v| v.as_bool()) {
@@ -466,7 +473,7 @@ pub async fn find_discover_seeds(
     method: SeedMethod,
 ) -> Result<Vec<image::Model>, DbErr> {
     let base_query = || {
-        Image::find()
+        exclude_deleted(Image::find())
             .filter(image::Column::SourceId.is_not_null())
             .filter(image::Column::IsPublic.eq(true))
     };
@@ -527,8 +534,8 @@ pub async fn find_discover_seeds(
 
 /// Count accessible images
 pub async fn count_accessible(db: &DatabaseConnection) -> Result<u64, DbErr> {
-    Image::find()
-        .filter(image::Column::Accessable.eq(true))
+    exclude_deleted(Image::find())
+        .filter(image::Column::Accessible.eq(true))
         .count(db)
         .await
 }
@@ -589,7 +596,7 @@ pub async fn color_search(
     if mode == "primary" {
         // Search by primary color (stored on images table)
         // Pre-filter with bounding box, compute exact distance in Rust
-        let results = Image::find()
+        let results = exclude_deleted(Image::find())
             .filter(image::Column::IsPublic.eq(true))
             .filter(image::Column::PrimaryL.is_not_null())
             .filter(image::Column::PrimaryL.between(target_l - box_radius, target_l + box_radius))
@@ -677,7 +684,7 @@ pub async fn color_search(
         let images: Vec<image::Model> = if image_ids.is_empty() {
             Vec::new()
         } else {
-            Image::find()
+            exclude_deleted(Image::find())
                 .filter(image::Column::Id.is_in(image_ids))
                 .all(db)
                 .await?

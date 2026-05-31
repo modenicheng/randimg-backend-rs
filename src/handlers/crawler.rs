@@ -1,4 +1,4 @@
-use axum::{extract::Query, extract::State, Json};
+use axum::{extract::Path, extract::Query, extract::State, Json};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -180,11 +180,13 @@ pub async fn error_crawler_image(
     _auth: AuthUser,
     Json(body): Json<ErrorCrawlerImageRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(ref task_id) = body.task_id {
-        task_queue::fail_task(&state.db, task_id, "requeued by worker")
-            .await
-            .map_err(AppError::from)?;
-    }
+    let task_id = body.task_id.ok_or_else(|| {
+        AppError::BadRequest("task_id is required".into())
+    })?;
+
+    task_queue::fail_task(&state.db, &task_id, "requeued by worker")
+        .await
+        .map_err(AppError::from)?;
 
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
@@ -219,8 +221,8 @@ pub async fn trigger_discover(
     })))
 }
 
-/// GET /adjust-accessible  Get images for accessibility check
-pub async fn get_adjust_accessible(
+/// GET /admin/accessibility-queue  Get images for accessibility check
+pub async fn get_accessibility_queue(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
     Query(query): Query<CrawlerImageQuery>,
@@ -229,7 +231,7 @@ pub async fn get_adjust_accessible(
         use sea_orm::*;
         let images = Image::find()
             .filter(image::Column::IsPublic.eq(true))
-            .filter(image::Column::Accessable.is_null())
+            .filter(image::Column::Accessible.is_null())
             .all(&state.db)
             .await
             .map_err(AppError::from)?;
@@ -275,4 +277,32 @@ pub async fn get_adjust_accessible(
         },
         None => Err(AppError::NotFound("Queue empty".into())),
     }
+}
+
+/// GET /crawler/{crawler_id}  Get single crawler detail
+pub async fn get_crawler(
+    State(state): State<Arc<AppState>>,
+    Path(crawler_id): Path<i32>,
+    _auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let crawler = query::crawler::find_by_id(&state.db, crawler_id)
+        .await
+        .map_err(AppError::from)?;
+
+    let c = crawler.ok_or(AppError::NotFound("Crawler not found".into()))?;
+
+    Ok(Json(serde_json::json!({
+        "id": c.id,
+        "task_name": c.task_name,
+        "crawl_type": c.crawl_type,
+        "status": c.status,
+        "start_time": c.start_time,
+        "end_time": c.end_time,
+        "total_pages": c.total_pages,
+        "processed_pages": c.processed_pages,
+        "target_user_id": c.target_user_id,
+        "target_start_date": c.target_start_date,
+        "target_end_date": c.target_end_date,
+        "target_search_prompt": c.target_search_prompt,
+    })))
 }

@@ -1,4 +1,4 @@
-use axum::{extract::State, Form, Json};
+use axum::{extract::State, Json};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ pub struct LoginRequest {
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
-    Form(body): Form<LoginRequest>,
+    Json(body): Json<LoginRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin = admin::find_by_username(&state.db, &body.username)
         .await

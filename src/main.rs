@@ -1,4 +1,4 @@
-use axum::{routing::get, routing::post, Router};
+use axum::{routing::get, routing::patch, routing::post, Router};
 use randimg_backend_rs::{config::AppConfig, db, handlers, task_queue, AppState};
 use std::sync::Arc;
 use tokio::signal;
@@ -72,6 +72,7 @@ async fn main() {
         .allow_headers(Any);
 
     let app = Router::new()
+        .route("/health", get(handlers::health::health_check))
         .route("/", get(handlers::image::random_image))
         .route(
             "/image/{image_id}",
@@ -93,7 +94,7 @@ async fn main() {
             get(handlers::crawler::get_crawler_image)
                 .post(handlers::crawler::error_crawler_image),
         )
-        .route("/adjust-accessible", get(handlers::crawler::get_adjust_accessible))
+        .route("/admin/accessibility-queue", get(handlers::crawler::get_accessibility_queue))
         .route("/crawler/discover", post(handlers::crawler::trigger_discover))
         .route("/tasks", get(handlers::task::list_tasks))
         .route(
@@ -101,6 +102,19 @@ async fn main() {
             get(handlers::task::get_task),
         )
         .route("/tasks/{task_id}/retry", post(handlers::task::retry_task))
+        .route("/authors", get(handlers::author::list_authors))
+        .route(
+            "/authors/{author_id}",
+            get(handlers::author::get_author),
+        )
+        .route(
+            "/tags/{tag_id}",
+            patch(handlers::tag::update_tag).delete(handlers::tag::delete_tag),
+        )
+        .route(
+            "/crawler/{crawler_id}",
+            get(handlers::crawler::get_crawler),
+        )
         .nest_service("/images", ServeDir::new(&config.image_dir))
         .layer(TraceLayer::new_for_http())
         .layer(cors)

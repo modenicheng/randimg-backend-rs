@@ -15,6 +15,7 @@ pub async fn find_filtered(
     task_type: Option<&str>,
     status: Option<&str>,
     limit: u64,
+    offset: u64,
 ) -> Result<Vec<task::Model>, DbErr> {
     let mut query = TaskEntity::find()
         .order_by_desc(task::Column::CreatedAt);
@@ -26,7 +27,7 @@ pub async fn find_filtered(
         query = query.filter(task::Column::Status.eq(s));
     }
 
-    query.limit(limit).all(db).await
+    query.limit(limit).offset(offset).all(db).await
 }
 
 /// Retry a failed task: reset status to pending, clear error, bump retry_count.

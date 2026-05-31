@@ -16,7 +16,7 @@ pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
         .map_err(|e| e.to_string())?
     {
         let mut active: image::ActiveModel = img_model.into();
-        active.accessable = Set(Some(true));
+        active.accessible = Set(Some(true));
         active.update(&state.db).await.map_err(|e| e.to_string())?;
     }
 
