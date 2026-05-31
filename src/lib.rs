@@ -11,11 +11,14 @@ pub mod task_queue;
 
 use config::AppConfig;
 
+/// The Apalis connection pool type — determined by feature flag.
+pub type ApalisPool = db_backend::Pool;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: sea_orm::DatabaseConnection,
     pub config: AppConfig,
     pub oss: dogecloud::DogeCloudOss,
-    pub job_storage: task_queue::handlers::JobStorage,
-    pub apalis_pool: apalis_sqlite::SqlitePool,
+    pub job_storage: db_backend::JobStorage,
+    pub apalis_pool: ApalisPool,
 }
