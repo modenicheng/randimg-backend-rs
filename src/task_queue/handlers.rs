@@ -1,119 +1,15 @@
 use std::sync::Arc;
 
 use apalis::prelude::*;
-use apalis_sqlite::SqliteStorage;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
-use tokio::sync::Mutex;
 
 use crate::AppState;
 use crate::db::query;
 use crate::db::query::image::SeedMethod;
+use crate::db_backend::JobStorage;
 use crate::pixiv::PixivApi;
 
 use super::jobs::*;
-
-/// Type alias for SqliteStorage with JSON codec and default fetcher.
-type JsonSqliteStorage<T> =
-    SqliteStorage<T, apalis_codec::json::JsonCodec<Vec<u8>>, apalis_sqlite::fetcher::SqliteFetcher>;
-
-/// Holds all typed job storages. Each storage is mutex-wrapped
-/// because `TaskSink::push` requires `&mut self`.
-#[derive(Clone)]
-pub struct JobStorage {
-    pub crawl: Arc<Mutex<JsonSqliteStorage<CrawlJob>>>,
-    pub download: Arc<Mutex<JsonSqliteStorage<DownloadJob>>>,
-    pub color_extract: Arc<Mutex<JsonSqliteStorage<ColorExtractJob>>>,
-    pub upload: Arc<Mutex<JsonSqliteStorage<UploadJob>>>,
-    pub accessibility_check: Arc<Mutex<JsonSqliteStorage<AccessibilityCheckJob>>>,
-    pub discover: Arc<Mutex<JsonSqliteStorage<DiscoverJob>>>,
-    pub refresh_pixiv_token: Arc<Mutex<JsonSqliteStorage<RefreshPixivTokenJob>>>,
-}
-
-impl JobStorage {
-    /// Create a new JobStorage from a shared SQLite pool.
-    /// Call `SqliteStorage::setup(&pool)` before this.
-    pub fn new(pool: &apalis_sqlite::SqlitePool) -> Self {
-        Self {
-            crawl: Arc::new(Mutex::new(SqliteStorage::new(pool))),
-            download: Arc::new(Mutex::new(SqliteStorage::new(pool))),
-            color_extract: Arc::new(Mutex::new(SqliteStorage::new(pool))),
-            upload: Arc::new(Mutex::new(SqliteStorage::new(pool))),
-            accessibility_check: Arc::new(Mutex::new(SqliteStorage::new(pool))),
-            discover: Arc::new(Mutex::new(SqliteStorage::new(pool))),
-            refresh_pixiv_token: Arc::new(Mutex::new(SqliteStorage::new(pool))),
-        }
-    }
-
-    /// Push a job to the crawl queue.
-    pub async fn push_crawl(&self, job: CrawlJob) -> Result<(), String> {
-        self.crawl
-            .lock()
-            .await
-            .push(job)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    /// Push a job to the download queue.
-    pub async fn push_download(&self, job: DownloadJob) -> Result<(), String> {
-        self.download
-            .lock()
-            .await
-            .push(job)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    /// Push a job to the color_extract queue.
-    pub async fn push_color_extract(&self, job: ColorExtractJob) -> Result<(), String> {
-        self.color_extract
-            .lock()
-            .await
-            .push(job)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    /// Push a job to the upload queue.
-    pub async fn push_upload(&self, job: UploadJob) -> Result<(), String> {
-        self.upload
-            .lock()
-            .await
-            .push(job)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    /// Push a job to the accessibility_check queue.
-    pub async fn push_accessibility_check(&self, job: AccessibilityCheckJob) -> Result<(), String> {
-        self.accessibility_check
-            .lock()
-            .await
-            .push(job)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    /// Push a job to the discover queue.
-    pub async fn push_discover(&self, job: DiscoverJob) -> Result<(), String> {
-        self.discover
-            .lock()
-            .await
-            .push(job)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    /// Push a job to the refresh_pixiv_token queue.
-    pub async fn push_refresh_pixiv_token(&self, job: RefreshPixivTokenJob) -> Result<(), String> {
-        self.refresh_pixiv_token
-            .lock()
-            .await
-            .push(job)
-            .await
-            .map_err(|e| e.to_string())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Job handlers
