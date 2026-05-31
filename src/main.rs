@@ -10,6 +10,7 @@ mod task_queue;
 use axum::{routing::get, routing::post, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
 
 use config::AppConfig;
@@ -65,6 +66,7 @@ async fn main() {
                 .post(handlers::crawler::error_crawler_image),
         )
         .route("/adjust-accessible", get(handlers::crawler::get_adjust_accessible))
+        .nest_service("/images", ServeDir::new(&config.image_dir))
         .layer(cors)
         .with_state(state);
 
