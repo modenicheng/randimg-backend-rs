@@ -2,6 +2,7 @@ pub mod auth;
 pub mod color;
 pub mod config;
 pub mod db;
+pub mod db_backend;
 pub mod dogecloud;
 pub mod error;
 pub mod handlers;
