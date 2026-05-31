@@ -1,17 +1,61 @@
 use crate::AppState;
 use crate::db::entities::task;
+use crate::pixiv::{DownloadManager, resolve_download_tasks};
+use sea_orm::*;
 
-pub async fn run(_state: &AppState, task: &task::Model) -> Result<(), String> {
-    let _image_id = task.payload["image_id"]
+pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
+    let image_id = task.payload["image_id"]
         .as_i64()
         .ok_or("missing image_id")?;
 
-    let _source_url = task.payload["source_url"]
+    let source_image_url = task.payload["source_image_url"]
         .as_str()
-        .ok_or("missing source_url")?;
+        .ok_or("missing source_image_url")?;
 
-    // TODO: Implement actual download logic (reqwest + Pixiv referer)
-    // After download, update downloaded=true
+    let image_path = task.payload["image_path"]
+        .as_str()
+        .ok_or("missing image_path")?;
 
+    // Download the image using reqwest with Pixiv referer
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(source_image_url)
+        .header("Referer", "https://app-api.pixiv.net/")
+        .send()
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Download failed with status: {}", resp.status()));
+    }
+
+    let bytes = resp.bytes().await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    // Save to image_dir
+    let file_path = format!("{}/{}", state.config.image_dir, image_path);
+
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(&file_path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+
+    std::fs::write(&file_path, &bytes)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+
+    // Update database: downloaded=true
+    use crate::db::entities::image::{self, Entity as Image};
+    if let Some(img_model) = Image::find_by_id(image_id as i32)
+        .one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        let mut active: image::ActiveModel = img_model.into();
+        active.downloaded = Set(true);
+        active.update(&state.db).await.map_err(|e| e.to_string())?;
+    }
+
+    tracing::info!("Downloaded image {} to {}", image_id, file_path);
     Ok(())
 }
