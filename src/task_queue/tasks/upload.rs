@@ -7,7 +7,28 @@ pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
         .or_else(|| task.payload["image_id"].as_i64().map(|v| v as i32))
         .ok_or("missing image_id")?;
 
-    // TODO: Implement S3 upload logic (DogeCloud OSS)
+    let image_path = task.image_path
+        .as_deref()
+        .or_else(|| task.payload["image_path"].as_str())
+        .ok_or("missing image_path")?;
+
+    // 读取本地文件
+    let file_path = format!("{}/{}", state.config.image_dir, image_path);
+    let bytes = tokio::fs::read(&file_path)
+        .await
+        .map_err(|e| format!("Failed to read image file {}: {}", file_path, e))?;
+
+    // 上传到 DogeCloud OSS
+    state.oss
+        .upload(image_path, bytes)
+        .await
+        .map_err(|e| format!("OSS upload failed: {}", e))?;
+
+    tracing::info!(
+        image_id = image_id,
+        path = %image_path,
+        "Uploaded image to DogeCloud OSS"
+    );
 
     // Mark image as public: pipeline completed (download + color_extract + upload)
     use crate::db::entities::image::{self, Entity as Image};

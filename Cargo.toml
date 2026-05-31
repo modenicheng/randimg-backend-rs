@@ -56,6 +56,21 @@ uuid = { version = "1", features = ["v4"] }
 pixiv-client = "1.0.0"
 rayon = "1.12.0"
 
+# Background job queue
+apalis = { version = "1.0.0-rc.9", features = ["retry", "tracing"] }
+apalis-sqlite = { version = "1.0.0-rc.8", default-features = false, features = ["tokio-comp", "migrate", "json", "chrono"] }
+apalis-codec = { version = "0.1.0-rc.9", features = ["json"] }
+
+# DogeCloud OSS (AWS S3 compatible)
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
+aws-credential-types = "1"
+hmac = "0.12"
+sha1 = "0.10"
+hex = "0.4"
+serde_urlencoded = "0.7"
+anyhow = "1"
+
 [[bin]]
 name = "create_admin"
 path = "src/bin/create_admin.rs"

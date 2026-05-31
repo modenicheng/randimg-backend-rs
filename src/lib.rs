@@ -2,6 +2,7 @@ pub mod auth;
 pub mod color;
 pub mod config;
 pub mod db;
+pub mod dogecloud;
 pub mod error;
 pub mod handlers;
 pub mod pixiv;
@@ -13,4 +14,5 @@ use config::AppConfig;
 pub struct AppState {
     pub db: sea_orm::DatabaseConnection,
     pub config: AppConfig,
+    pub oss: dogecloud::DogeCloudOss,
 }
