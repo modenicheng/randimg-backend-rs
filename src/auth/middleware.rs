@@ -1,4 +1,5 @@
 use axum::{
+    extract::{FromRef, State},
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
     RequestPartsExt,
@@ -18,7 +19,7 @@ pub struct AuthUser {
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
-    Arc<AppState>: FromRequestParts<S>,
+    Arc<AppState>: FromRef<S>,
 {
     type Rejection = StatusCode;
 
@@ -28,7 +29,7 @@ where
             .await
             .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
-        let state: Arc<AppState> = parts
+        let State(state): State<Arc<AppState>> = parts
             .extract_with_state(_state)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -50,7 +51,7 @@ pub struct OptionalAuthUser {
 impl<S> FromRequestParts<S> for OptionalAuthUser
 where
     S: Send + Sync,
-    Arc<AppState>: FromRequestParts<S>,
+    Arc<AppState>: FromRef<S>,
 {
     type Rejection = StatusCode;
 
@@ -61,7 +62,7 @@ where
             .ok();
 
         if let Some(TypedHeader(Authorization(bearer))) = auth_header {
-            let state: Arc<AppState> = parts
+            let State(state): State<Arc<AppState>> = parts
                 .extract_with_state(_state)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
