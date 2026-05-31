@@ -2809,6 +2809,7 @@ dependencies = [
  "jsonwebtoken",
  "migration",
  "pixiv-client",
+ "rayon",
  "reqwest 0.12.28",
  "sea-orm",
  "serde",

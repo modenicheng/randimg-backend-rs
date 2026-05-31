@@ -136,7 +136,7 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
     let (w, h) = img.dimensions();
     let new_w = ((w as f64 * scale) as u32).max(1);
     let new_h = ((h as f64 * scale) as u32).max(1);
-    let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
+    let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
     let rgb = small.to_rgb8();
 
     // Collect pixels as [u8; 3]
@@ -162,11 +162,11 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
         .collect();
 
     // KMeans clustering in LAB space
-    let lab_centroids = kmeans::kmeans(&lab_pixels, 10, 50);
+    let lab_centroids = kmeans::kmeans(&lab_pixels, 10, 50, Some(2048));
 
     // Sort by L* (lightness)
     let mut sorted_lab = lab_centroids;
-    sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
+    sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
 
     // Convert LAB centroids back to RGB
     let colors: Vec<[u8; 3]> = sorted_lab
