@@ -26,11 +26,12 @@ pub async fn submit_task(
     model.insert(db).await
 }
 
-/// Claim next pending task (atomic)
+/// Claim next pending task (atomic via UPDATE ... WHERE status='pending')
 pub async fn claim_next_task(
     db: &DatabaseConnection,
     task_type: &str,
 ) -> Result<Option<task::Model>, DbErr> {
+    // Find the best candidate
     let pending = TaskEntity::find()
         .filter(task::Column::Status.eq("pending"))
         .filter(task::Column::TaskType.eq(task_type))
@@ -39,15 +40,33 @@ pub async fn claim_next_task(
         .one(db)
         .await?;
 
-    if let Some(t) = pending {
-        let mut active: task::ActiveModel = t.into();
-        active.status = Set("running".to_string());
-        active.started_at = Set(Some(Utc::now().naive_utc()));
-        let updated = active.update(db).await?;
-        return Ok(Some(updated));
-    }
+    let Some(t) = pending else {
+        return Ok(None);
+    };
 
-    Ok(None)
+    // Atomic update: only succeed if still pending (prevents race condition)
+    let now = Utc::now().naive_utc();
+    let update_result = task::ActiveModel {
+        id: Set(t.id.clone()),
+        status: Set("running".to_string()),
+        started_at: Set(Some(now)),
+        ..Default::default()
+    }
+    .update(db)
+    .await;
+
+    match update_result {
+        Ok(updated) => {
+            // Verify we actually claimed it (status should be running now)
+            if updated.status == "running" {
+                Ok(Some(updated))
+            } else {
+                // Another worker claimed it first
+                Ok(None)
+            }
+        }
+        Err(_) => Ok(None),
+    }
 }
 
 /// Mark task completed

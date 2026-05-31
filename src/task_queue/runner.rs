@@ -6,7 +6,7 @@ use super::tasks;
 
 /// Start background task processing loops
 pub async fn start_runner(state: Arc<AppState>) {
-    let task_types = vec!["color_extract", "download", "upload", "crawl"];
+    let task_types = vec!["color_extract", "download", "upload", "crawl", "accessibility_check"];
 
     for task_type in task_types {
         let state = state.clone();
@@ -21,6 +21,7 @@ pub async fn start_runner(state: Arc<AppState>) {
                             "download" => tasks::download::run(&state, &task).await,
                             "upload" => tasks::upload::run(&state, &task).await,
                             "crawl" => tasks::crawl::run(&state, &task).await,
+                            "accessibility_check" => tasks::accessibility_check::run(&state, &task).await,
                             _ => Ok(()),
                         };
 

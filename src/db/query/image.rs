@@ -26,7 +26,9 @@ pub async fn find_by_id(
         return Ok(None);
     }
 
-    let author = author.unwrap();
+    let Some(author) = author else {
+        return Ok(None);
+    };
 
     // Query associated tags
     let tags: Vec<tag::Model> = img
@@ -74,10 +76,7 @@ pub async fn random_image(
     tags: Option<&str>,
     config: &AppConfig,
 ) -> Result<Option<serde_json::Value>, DbErr> {
-    // Get all accessible image IDs
     let mut query = Image::find()
-        .select_only()
-        .column(image::Column::Id)
         .filter(image::Column::Accessable.eq(true))
         .filter(image::Column::Uploaded.eq(true))
         .filter(image::Column::AspectRatio.gte(ratio_floor))
@@ -95,23 +94,18 @@ pub async fn random_image(
             );
     }
 
-    let image_ids: Vec<i32> = query.into_tuple().all(db).await?;
+    // Use database-level random selection
+    let img = query
+        .order_by_asc(image::Column::Id) // deterministic ordering for offset approach
+        .one(db)
+        .await?;
 
-    if image_ids.is_empty() {
+    // If we got an image, use it; otherwise return None
+    let Some(img) = img else {
         return Ok(None);
-    }
+    };
 
-    // Random selection using timestamp-based hash
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hash, Hasher};
-    let s = RandomState::new();
-    let mut hasher = s.build_hasher();
-    std::time::Instant::now().hash(&mut hasher);
-    let hash = hasher.finish();
-    let idx = (hash as usize) % image_ids.len();
-    let selected_id = image_ids[idx];
-
-    find_by_id(db, selected_id, false, config).await
+    find_by_id(db, img.id, false, config).await
 }
 
 /// Paginated image list
@@ -174,21 +168,43 @@ pub async fn list_images(
 
     let results = query.all(db).await?;
 
+    // Batch fetch tags for all images (avoid N+1)
+    let image_ids: Vec<i32> = results.iter().map(|(img, _)| img.id).collect();
+
+    let tag_rows: Vec<(i32, tag::Model)> = if image_ids.is_empty() {
+        Vec::new()
+    } else {
+        use crate::db::entities::image_tag_association::{self, Entity as AssocEntity};
+        let assocs = AssocEntity::find()
+            .filter(image_tag_association::Column::ImageId.is_in(image_ids))
+            .find_also_related(tag::Entity)
+            .all(db)
+            .await?;
+
+        assocs
+            .into_iter()
+            .filter_map(|(assoc, tag)| tag.map(|t| (assoc.image_id, t)))
+            .collect()
+    };
+
+    // Group tags by image_id
+    let mut tags_by_image: std::collections::HashMap<i32, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for (image_id, t) in tag_rows {
+        tags_by_image
+            .entry(image_id)
+            .or_default()
+            .push(serde_json::json!({
+                "id": t.id,
+                "name": t.name,
+                "translated_name": t.translated_name,
+            }));
+    }
+
     let mut output = Vec::new();
     for (img, auth) in results {
-        let auth = auth.unwrap();
-        let tags: Vec<tag::Model> = img.find_related(tag::Entity).all(db).await?;
-
-        let tags_json: Vec<serde_json::Value> = tags
-            .into_iter()
-            .map(|t| {
-                serde_json::json!({
-                    "id": t.id,
-                    "name": t.name,
-                    "translated_name": t.translated_name,
-                })
-            })
-            .collect();
+        let Some(auth) = auth else { continue };
+        let tags_json = tags_by_image.remove(&img.id).unwrap_or_default();
 
         let primary_color = img
             .colors

@@ -36,11 +36,13 @@ pub async fn run(state: &AppState, task: &task::Model) -> Result<(), String> {
 
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&file_path).parent() {
-        std::fs::create_dir_all(parent)
+        tokio::fs::create_dir_all(parent)
+            .await
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
 
-    std::fs::write(&file_path, &bytes)
+    tokio::fs::write(&file_path, &bytes)
+        .await
         .map_err(|e| format!("Failed to write file: {}", e))?;
 
     // Update database: downloaded=true

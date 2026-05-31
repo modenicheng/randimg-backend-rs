@@ -170,22 +170,33 @@ pub async fn get_crawler_image(
     }
 }
 
+#[derive(Deserialize)]
+pub struct ErrorCrawlerImageRequest {
+    pub task_id: Option<String>,
+    pub id: Option<i64>,
+    pub processing: Option<bool>,
+}
+
 /// POST /crawler/image  Error callback
 pub async fn error_crawler_image(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
-    Json(body): Json<serde_json::Value>,
+    Json(body): Json<ErrorCrawlerImageRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(task_id) = body["task_id"].as_str() {
+    if let Some(ref task_id) = body.task_id {
         task_queue::fail_task(&state.db, task_id, "requeued by worker")
             .await
             .map_err(AppError::from)?;
     }
 
-    if let Some(image_id) = body["id"].as_i64() {
-        query::image::update_fields(&state.db, image_id as i32, body)
-            .await
-            .map_err(AppError::from)?;
+    if let Some(image_id) = body.id {
+        query::image::update_fields(
+            &state.db,
+            image_id as i32,
+            serde_json::json!({ "processing": body.processing.unwrap_or(false) }),
+        )
+        .await
+        .map_err(AppError::from)?;
     }
 
     Ok(Json(serde_json::json!({ "status": "ok" })))

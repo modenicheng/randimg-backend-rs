@@ -212,13 +212,18 @@ async fn save_illust(state: &AppState, illust: &Illust) -> Result<(), String> {
                     .await
                     .map_err(|e| format!("Failed to upsert tag: {}", e))?;
 
-                // Insert association (ignore if exists)
-                let _ = crate::db::entities::image_tag_association::ActiveModel {
+                // Insert association (ignore duplicate)
+                let result = crate::db::entities::image_tag_association::ActiveModel {
                     image_id: Set(image.id),
                     tag_id: Set(tag_model.id),
                 }
                 .insert(db)
                 .await;
+                match result {
+                    Ok(_) => {}
+                    Err(sea_orm::DbErr::RecordNotInserted) => {} // duplicate, ignore
+                    Err(e) => return Err(format!("Failed to insert tag association: {}", e)),
+                }
             }
         }
 

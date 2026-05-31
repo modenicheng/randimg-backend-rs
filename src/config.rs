@@ -15,11 +15,17 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
+
+        let secret_key = env::var("SECRET_KEY")
+            .unwrap_or_else(|_| "change-me".into());
+        if secret_key == "change-me" {
+            panic!("SECRET_KEY must be set in environment. Do not use the default 'change-me'.");
+        }
+
         Self {
             database_url: env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://data/randimg.db?mode=rune".into()),
-            secret_key: env::var("SECRET_KEY")
-                .unwrap_or_else(|_| "change-me".into()),
+            secret_key,
             jwt_expire_minutes: env::var("JWT_EXPIRE_MINUTES")
                 .ok()
                 .and_then(|v| v.parse().ok())

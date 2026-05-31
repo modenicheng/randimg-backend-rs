@@ -38,10 +38,21 @@ pub struct ListQuery {
     pub tags: Option<String>,
 }
 
-/// Serve a local image file from disk
-fn serve_local_image(state: &AppState, image_path: &str) -> Result<Response, AppError> {
+/// Serve a local image file from disk (with path traversal protection)
+async fn serve_local_image(state: &AppState, image_path: &str) -> Result<Response, AppError> {
     let file_path = format!("{}/{}", state.config.image_dir, image_path);
-    let bytes = std::fs::read(&file_path)
+
+    // Path traversal guard: canonicalize and verify prefix
+    let base = std::fs::canonicalize(&state.config.image_dir)
+        .map_err(|_| AppError::Internal("Invalid image directory".into()))?;
+    let full = std::fs::canonicalize(&file_path)
+        .map_err(|_| AppError::NotFound("Image file not found".into()))?;
+    if !full.starts_with(&base) {
+        return Err(AppError::BadRequest("Invalid image path".into()));
+    }
+
+    let bytes = tokio::fs::read(&full)
+        .await
         .map_err(|_| AppError::NotFound("Image file not found".into()))?;
     Ok(axum::response::Response::builder()
         .header("Content-Type", "image/jpeg")
@@ -50,7 +61,7 @@ fn serve_local_image(state: &AppState, image_path: &str) -> Result<Response, App
 }
 
 /// Format image response based on format and local query params
-fn format_image_response(
+async fn format_image_response(
     img: &serde_json::Value,
     state: &AppState,
     format: &str,
@@ -58,7 +69,7 @@ fn format_image_response(
 ) -> Result<Response, AppError> {
     if local {
         let path = img["image_path"].as_str().unwrap();
-        return serve_local_image(state, path);
+        return serve_local_image(state, path).await;
     }
 
     if format == "image" {
@@ -92,7 +103,7 @@ pub async fn random_image(
     let format = query.format.as_deref().unwrap_or("json");
     let local = query.local.unwrap_or(false);
 
-    format_image_response(&img, &state, format, local)
+    format_image_response(&img, &state, format, local).await
 }
 
 /// GET /image/{image_id}  Get image by ID
@@ -114,7 +125,7 @@ pub async fn get_image(
     let format = query.format.as_deref().unwrap_or("json");
     let local = query.local.unwrap_or(false);
 
-    format_image_response(&img, &state, format, local)
+    format_image_response(&img, &state, format, local).await
 }
 
 /// GET /list  Paginated image list
@@ -127,10 +138,7 @@ pub async fn list_images(
     let is_admin = auth.username.is_some();
 
     let offset = query.offset.unwrap_or(0);
-    let mut limit = query.limit.unwrap_or(30);
-    if limit >= 300 {
-        limit = 100;
-    }
+    let limit = query.limit.unwrap_or(30).min(300);
 
     let desc = query
         .desc
@@ -208,8 +216,16 @@ pub async fn delete_image(
     Path(image_id): Path<i32>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    use sea_orm::EntityTrait;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use crate::db::entities::image::Entity as ImageEntity;
+    use crate::db::entities::image_tag_association::{self, Entity as AssocEntity};
+
+    // Delete tag associations first
+    AssocEntity::delete_many()
+        .filter(image_tag_association::Column::ImageId.eq(image_id))
+        .exec(&state.db)
+        .await
+        .map_err(AppError::from)?;
 
     let result = ImageEntity::delete_by_id(image_id)
         .exec(&state.db)

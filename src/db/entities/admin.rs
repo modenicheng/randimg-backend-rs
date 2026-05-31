@@ -7,6 +7,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub username: String,
+    #[serde(skip)]
     pub password: String,
     pub is_superuser: bool,
 }

@@ -7,18 +7,27 @@ pub async fn find_or_create(
     platform: Option<&str>,
     platform_id: Option<&str>,
 ) -> Result<author::Model, DbErr> {
-    let existing = Author::find()
-        .filter(
-            author::Column::Name.eq(name)
-                .or(author::Column::PlatformId.eq(platform_id.unwrap_or(""))),
-        )
-        .one(db)
-        .await?;
+    // First try to find by platform_id (most reliable identifier)
+    if let Some(pid) = platform_id {
+        if let Some(author) = Author::find()
+            .filter(author::Column::PlatformId.eq(pid))
+            .one(db)
+            .await?
+        {
+            return Ok(author);
+        }
+    }
 
-    if let Some(author) = existing {
+    // Then try to find by name
+    if let Some(author) = Author::find()
+        .filter(author::Column::Name.eq(name))
+        .one(db)
+        .await?
+    {
         return Ok(author);
     }
 
+    // Create new author
     let model = author::ActiveModel {
         name: Set(name.to_string()),
         platform: Set(platform.map(|s| s.to_string())),
