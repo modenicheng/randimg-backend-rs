@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use axum::{routing::get, routing::post, Router};
 use randimg_backend_rs::{config::AppConfig, db, handlers, task_queue, AppState};
 use std::sync::Arc;
@@ -10,12 +8,6 @@ use tower_http::trace::TraceLayer;
 use tracing_appender::rolling;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-fn print_routes(routes: &[(&str, Vec<&str>)]) {
-    for (path, methods) in routes {
-        let label = methods.join(", ");
-        println!("│   {:<20} {}", label, path);
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -64,8 +56,6 @@ async fn main() {
     };
     let _appender_guard = file_appender_guard;
 
-    let start = Instant::now();
-
     let db = db::init_database(&config.database_url).await;
 
     let state = Arc::new(AppState {
@@ -113,44 +103,10 @@ async fn main() {
         .await
         .unwrap();
     let local_addr = listener.local_addr().unwrap();
-    let elapsed = start.elapsed();
-
-    // === FastAPI-style startup banner =========================================
-    println!();
-    println!("  ╔═══════════════════════════════════════════════════════════════╗");
-    println!("  ║                  🖼️  randimg-backend-rs                      ║");
-    println!("  ╠═══════════════════════════════════════════════════════════════╣");
-    println!("  ║  Status   : READY                                           ║");
-    println!("  ║  Address  : http://{:<39} ║", local_addr);
-    println!("  ║  Database : {:<52}║", &config.database_url);
-    println!("  ║  Log Dir  : {:<52}║", &config.log_dir);
-    println!("  ║  Startup  : {:.3}s                                            ║", elapsed.as_secs_f64());
-    println!("  ╠═══════════════════════════════════════════════════════════════╣");
-    println!("  ║  Routes                                                       ║");
-    println!("  ├───────────────────────────────────────────────────────────────┤");
-    print_routes(&[
-        ("/", vec!["GET"]),
-        ("/image/{image_id}", vec!["GET", "PATCH", "DELETE"]),
-        ("/list", vec!["GET"]),
-        ("/color/search", vec!["GET"]),
-        ("/tags", vec!["GET"]),
-        ("/statistic", vec!["GET"]),
-        ("/token", vec!["POST"]),
-        ("/crawler", vec!["GET", "POST"]),
-        ("/crawler/image", vec!["GET", "POST"]),
-        ("/adjust-accessible", vec!["GET"]),
-        ("/images/*", vec!["Static"]),
-    ]);
-    println!("  ╠═══════════════════════════════════════════════════════════════╣");
-    println!("  ║  Press CTRL+C to stop the server                             ║");
-    println!("  ╚═══════════════════════════════════════════════════════════════╝");
-    println!();
 
     tracing::info!(
         address = %local_addr,
         database = %config.database_url,
-        log_dir = %config.log_dir,
-        startup_secs = %format!("{:.3}", elapsed.as_secs_f64()),
         "Server started"
     );
 
@@ -160,14 +116,10 @@ async fn main() {
         .await
         .unwrap();
 
-    println!();
-    println!("  ⏹  Shutting down…");
-
     tracing::info!("Shutting down — aborting background task runners…");
     for h in &runner_handles {
         h.abort();
     }
-    // 等待所有 runner 结束（最多 2 秒，避免卡死）
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         for h in runner_handles {
             let _ = h.await;
@@ -175,10 +127,7 @@ async fn main() {
     })
     .await;
 
-    // DatabaseConnection drop 时会自动关闭连接池
     tracing::info!("Shutdown complete");
-    println!("  ✅  Server stopped cleanly. Goodbye 👋");
-    println!();
 }
 
 async fn shutdown_signal() {
@@ -193,11 +142,9 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {
             tracing::info!("Received SIGINT (CTRL+C)");
-            println!("\n  ⏹  CTRL+C received — initiating graceful shutdown…");
         }
         _ = sigterm => {
             tracing::info!("Received SIGTERM");
-            println!("\n  ⏹  SIGTERM received — initiating graceful shutdown…");
         }
     }
 }
