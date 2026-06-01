@@ -60,8 +60,16 @@ pub async fn find_by_id(
         return Ok(None);
     };
 
-    // Query associated tags
-    let tags: Vec<tag::Model> = img.find_related(tag::Entity).all(db).await?;
+    // Query associated tags (explicit join to avoid ambiguous column names)
+    let tags: Vec<tag::Model> = {
+        use crate::db::entities::image_tag_association::{self, Entity as AssocEntity};
+        let assocs = AssocEntity::find()
+            .filter(image_tag_association::Column::ImageId.eq(img.id))
+            .find_also_related(tag::Entity)
+            .all(db)
+            .await?;
+        assocs.into_iter().filter_map(|(_, tag)| tag).collect()
+    };
 
     let tags_json: Vec<serde_json::Value> = tags
         .into_iter()

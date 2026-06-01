@@ -68,6 +68,21 @@ impl JobStorage {
         }
     }
 
+    /// Create a `JobStorage` backed by an in-memory SQLite pool.
+    ///
+    /// This is intended for tests that need a functional `AppState` without
+    /// connecting to an external database. The pool is ephemeral and will be
+    /// dropped when the returned `JobStorage` is dropped.
+    pub async fn new_for_test() -> Self {
+        let pool = apalis_sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create in-memory SQLite pool for test");
+        apalis_sqlite::SqliteStorage::setup(&pool)
+            .await
+            .expect("Failed to setup Apalis storage for test");
+        Self::new(&pool)
+    }
+
     /// Push a job to the crawl queue.
     pub async fn push_crawl(&self, job: CrawlJob) -> Result<(), String> {
         self.crawl.lock().await.push(job).await.map_err(|e| e.to_string())

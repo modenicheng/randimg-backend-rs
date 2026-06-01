@@ -51,6 +51,21 @@ impl DogeCloudOss {
         }
     }
 
+    /// Create a no-op instance for testing. Any operation that requires a real
+    /// S3 client will fail, but the struct itself can be held in `AppState`.
+    pub fn new_noop() -> Self {
+        Self {
+            keys: DogeCloudKeys {
+                access_key: String::new(),
+                secret_key: String::new(),
+            },
+            cache: CredentialCache::new(),
+            inner: Arc::new(RwLock::new(None)),
+            fallback_bucket: String::new(),
+            fallback_endpoint: String::new(),
+        }
+    }
+
     /// 确保凭证有效并返回 S3 Client 和 bucket 名称。
     ///
     /// 如果凭证已过期或尚未获取，会自动调用 DogeCloud API 获取新凭证。
