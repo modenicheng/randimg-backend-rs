@@ -33,6 +33,42 @@ pub struct ChildSummary {
     pub killed: u64,
 }
 
+/// Root task row with derived status flags computed from the descendant subtree.
+///
+/// The three boolean flags are computed in SQL via a recursive CTE.
+/// The Rust side maps them to a derived status string.
+#[derive(Debug, Clone)]
+pub struct RootWithDerivedStatus {
+    pub id: String,
+    pub job_type: String,
+    pub status: String,        // raw Apalis status (e.g. "Done")
+    pub attempts: i32,
+    pub max_attempts: i32,
+    pub run_at: i64,           // unix timestamp (sqlite) — feature-gated below
+    pub done_at: Option<i64>,
+    pub last_result: Option<String>,
+    pub priority: i32,
+    pub job: Vec<u8>,          // serialized payload blob
+    pub has_active: bool,
+    pub has_failed: bool,
+    pub has_completed: bool,
+}
+
+/// Map the three descendant-status flags to a user-facing derived status string.
+pub fn derived_status_from_flags(has_active: bool, has_failed: bool, has_completed: bool) -> &'static str {
+    if has_active {
+        "running"
+    } else if has_failed && has_completed {
+        "partial_success"
+    } else if has_failed {
+        "failed"
+    } else if has_completed {
+        "completed"
+    } else {
+        "pending"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Model → JsonValue helper (avoids needing Serialize on Model)
 // ---------------------------------------------------------------------------
@@ -41,6 +77,7 @@ pub struct ChildSummary {
 pub fn status_label(status: &str) -> &'static str {
     match status {
         apalis_job::STATUS_PENDING => "pending",
+        apalis_job::STATUS_QUEUED => "pending",
         apalis_job::STATUS_RUNNING => "running",
         apalis_job::STATUS_DONE   => "completed",
         apalis_job::STATUS_FAILED => "failed",
@@ -133,7 +170,7 @@ fn build_roots_query() -> Select<ApalisJob> {
 pub async fn list_roots(
     db: &DatabaseConnection,
     task_type: Option<&str>,
-    status: Option<&str>,
+    status: Option<&[&str]>,
     limit: u64,
     offset: u64,
 ) -> Result<Vec<apalis_job::Model>, DbErr> {
@@ -141,8 +178,8 @@ pub async fn list_roots(
     if let Some(tt) = task_type {
         q = q.filter(apalis_job::Column::JobType.eq(tt));
     }
-    if let Some(st) = status {
-        q = q.filter(apalis_job::Column::Status.eq(st));
+    if let Some(sts) = status {
+        q = q.filter(apalis_job::Column::Status.is_in(sts.iter().map(|s| *s)));
     }
     q.limit(limit).offset(offset).all(db).await
 }
@@ -151,14 +188,14 @@ pub async fn list_roots(
 pub async fn count_roots(
     db: &DatabaseConnection,
     task_type: Option<&str>,
-    status: Option<&str>,
+    status: Option<&[&str]>,
 ) -> Result<u64, DbErr> {
     let mut q = build_roots_query();
     if let Some(tt) = task_type {
         q = q.filter(apalis_job::Column::JobType.eq(tt));
     }
-    if let Some(st) = status {
-        q = q.filter(apalis_job::Column::Status.eq(st));
+    if let Some(sts) = status {
+        q = q.filter(apalis_job::Column::Status.is_in(sts.iter().map(|s| *s)));
     }
     q.count(db).await
 }
@@ -175,7 +212,7 @@ pub async fn list_children(
     db: &DatabaseConnection,
     parent_id: &str,
     task_type: Option<&str>,
-    status: Option<&str>,
+    status: Option<&[&str]>,
 ) -> Result<Vec<ChildJobNode>, DbErr> {
     let all_deps: Vec<String> = TaskDependency::find()
         .filter(task_dependency::Column::ParentJobId.eq(parent_id))
@@ -193,8 +230,8 @@ pub async fn list_children(
     if let Some(tt) = task_type {
         q = q.filter(apalis_job::Column::JobType.eq(tt));
     }
-    if let Some(st) = status {
-        q = q.filter(apalis_job::Column::Status.eq(st));
+    if let Some(sts) = status {
+        q = q.filter(apalis_job::Column::Status.is_in(sts.iter().map(|s| *s)));
     }
 
     let jobs = q.order_by_desc(apalis_job::Column::RunAt).all(db).await?;
@@ -221,7 +258,7 @@ pub async fn list_subtasks(
     db: &DatabaseConnection,
     parent_id: &str,
     task_type: Option<&str>,
-    status: Option<&str>,
+    status: Option<&[&str]>,
 ) -> Result<Vec<apalis_job::Model>, DbErr> {
     // Step 1: Get child_job_id values for this parent
     let child_ids: Vec<String> = TaskDependency::find()
@@ -242,8 +279,8 @@ pub async fn list_subtasks(
     if let Some(tt) = task_type {
         q = q.filter(apalis_job::Column::JobType.eq(tt));
     }
-    if let Some(st) = status {
-        q = q.filter(apalis_job::Column::Status.eq(st));
+    if let Some(sts) = status {
+        q = q.filter(apalis_job::Column::Status.is_in(sts.iter().map(|s| *s)));
     }
     q.order_by_desc(apalis_job::Column::RunAt).all(db).await
 }
@@ -276,7 +313,10 @@ pub async fn interrupt_subtasks(
     // Filter by status=pending and optionally job_type
     let mut cond = Condition::all()
         .add(apalis_job::Column::Id.is_in(&child_ids))
-        .add(apalis_job::Column::Status.eq(apalis_job::STATUS_PENDING));
+        .add(
+            apalis_job::Column::Status
+                .is_in([apalis_job::STATUS_PENDING, apalis_job::STATUS_QUEUED]),
+        );
 
     if let Some(tt) = job_type {
         cond = cond.add(apalis_job::Column::JobType.eq(tt));
@@ -326,4 +366,304 @@ pub async fn clear_dependencies_for_child(
         .exec(db)
         .await?;
     Ok(result.rows_affected)
+}
+
+// ---------------------------------------------------------------------------
+// Root listing with derived status (recursive CTE in SQL)
+// ---------------------------------------------------------------------------
+
+/// List root tasks with derived status flags computed from the descendant subtree.
+///
+/// Uses a recursive CTE to compute `has_active`, `has_failed`, `has_completed`
+/// flags per root entirely in SQL. Supports filtering by `task_type` and
+/// `derived_status`, plus `limit` / `offset` pagination.
+pub async fn list_roots_derived(
+    db: &DatabaseConnection,
+    task_type: Option<&str>,
+    derived_status: Option<&str>,
+    limit: u64,
+    offset: u64,
+) -> Result<Vec<RootWithDerivedStatus>, DbErr> {
+    let mut extra_filters = String::new();
+
+    if let Some(tt) = task_type {
+        extra_filters.push_str(&format!(" AND r.job_type = '{}'", tt.replace('\'', "''")));
+    }
+
+    match derived_status {
+        Some("running") => {
+            extra_filters.push_str(" AND COALESCE(rf.has_active, 0) = 1");
+        }
+        Some("partial_success") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 0 \
+                 AND COALESCE(rf.has_failed, 0) = 1 \
+                 AND COALESCE(rf.has_completed, 0) = 1",
+            );
+        }
+        Some("failed") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 0 \
+                 AND COALESCE(rf.has_failed, 0) = 1 \
+                 AND COALESCE(rf.has_completed, 0) = 0",
+            );
+        }
+        Some("completed") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 0 \
+                 AND COALESCE(rf.has_failed, 0) = 0 \
+                 AND COALESCE(rf.has_completed, 0) = 1",
+            );
+        }
+        Some("pending") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 0 \
+                 AND COALESCE(rf.has_failed, 0) = 0 \
+                 AND COALESCE(rf.has_completed, 0) = 0",
+            );
+        }
+        Some(_) => {
+            extra_filters.push_str(" AND 1 = 0");
+        }
+        None => {}
+    }
+
+    #[cfg(feature = "sqlite")]
+    let sql = format!(
+        r#"
+        WITH RECURSIVE
+            descendants AS (
+                SELECT td.parent_job_id AS root_id,
+                       td.child_job_id AS descendant_id
+                FROM task_dependencies td
+                WHERE td.parent_job_id NOT IN (
+                    SELECT child_job_id FROM task_dependencies
+                )
+                UNION ALL
+                SELECT d.root_id, td.child_job_id
+                FROM descendants d
+                JOIN task_dependencies td ON td.parent_job_id = d.descendant_id
+            ),
+            root_flags AS (
+                SELECT
+                    d.root_id,
+                    MAX(CASE WHEN j2.status IN ('Pending','Queued','Running') THEN 1 ELSE 0 END) AS has_active,
+                    MAX(CASE WHEN j2.status IN ('Failed','Killed')              THEN 1 ELSE 0 END) AS has_failed,
+                    MAX(CASE WHEN j2.status = 'Done'                            THEN 1 ELSE 0 END) AS has_completed
+                FROM descendants d
+                JOIN Jobs j2 ON j2.id = d.descendant_id
+                GROUP BY d.root_id
+            )
+        SELECT
+            r.id, r.job_type, r.status, r.attempts, r.max_attempts,
+            r.run_at, r.done_at, r.last_result, r.priority, r.job,
+            COALESCE(rf.has_active, 0)    AS has_active,
+            COALESCE(rf.has_failed, 0)    AS has_failed,
+            COALESCE(rf.has_completed, 0) AS has_completed
+        FROM Jobs r
+        LEFT JOIN root_flags rf ON rf.root_id = r.id
+        WHERE r.id NOT IN (SELECT child_job_id FROM task_dependencies)
+        {extra_filters}
+        ORDER BY r.run_at DESC
+        LIMIT {limit} OFFSET {offset}
+        "#
+    );
+
+    #[cfg(feature = "postgres")]
+    let sql = format!(
+        r#"
+        WITH RECURSIVE
+            descendants AS (
+                SELECT td.parent_job_id AS root_id,
+                       td.child_job_id AS descendant_id
+                FROM task_dependencies td
+                WHERE td.parent_job_id NOT IN (
+                    SELECT child_job_id FROM task_dependencies
+                )
+                UNION ALL
+                SELECT d.root_id, td.child_job_id
+                FROM descendants d
+                JOIN task_dependencies td ON td.parent_job_id = d.descendant_id
+            ),
+            root_flags AS (
+                SELECT
+                    d.root_id,
+                    BOOL_OR(j2.status IN ('Pending','Queued','Running')) AS has_active,
+                    BOOL_OR(j2.status IN ('Failed','Killed'))            AS has_failed,
+                    BOOL_OR(j2.status = 'Done')                          AS has_completed
+                FROM descendants d
+                JOIN apalis.jobs j2 ON j2.id = d.descendant_id
+                GROUP BY d.root_id
+            )
+        SELECT
+            r.id, r.job_type, r.status, r.attempts, r.max_attempts,
+            r.run_at, r.done_at, r.last_result, r.priority, r.job,
+            COALESCE(rf.has_active, false)    AS has_active,
+            COALESCE(rf.has_failed, false)    AS has_failed,
+            COALESCE(rf.has_completed, false) AS has_completed
+        FROM apalis.jobs r
+        LEFT JOIN root_flags rf ON rf.root_id = r.id
+        WHERE r.id NOT IN (SELECT child_job_id FROM task_dependencies)
+        {extra_filters}
+        ORDER BY r.run_at DESC
+        LIMIT {limit} OFFSET {offset}
+        "#
+    );
+
+    let stmt = Statement::from_string(db.get_database_backend(), sql);
+    let rows = db.query_all(stmt).await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        results.push(RootWithDerivedStatus {
+            id: row.try_get_by_index(0)?,
+            job_type: row.try_get_by_index(1)?,
+            status: row.try_get_by_index(2)?,
+            attempts: row.try_get_by_index(3)?,
+            max_attempts: row.try_get_by_index(4)?,
+            run_at: row.try_get_by_index(5)?,
+            done_at: row.try_get_by_index(6)?,
+            last_result: row.try_get_by_index(7)?,
+            priority: row.try_get_by_index(8)?,
+            job: row.try_get_by_index(9)?,
+            has_active: row.try_get_by_index::<i32>(10)? != 0,
+            has_failed: row.try_get_by_index::<i32>(11)? != 0,
+            has_completed: row.try_get_by_index::<i32>(12)? != 0,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Count root tasks with derived status filters applied.
+///
+/// Uses the same recursive CTE as `list_roots_derived` but returns only the
+/// count, which is more efficient for pagination metadata.
+pub async fn count_roots_derived(
+    db: &DatabaseConnection,
+    task_type: Option<&str>,
+    derived_status: Option<&str>,
+) -> Result<u64, DbErr> {
+    let mut extra_filters = String::new();
+
+    if let Some(tt) = task_type {
+        extra_filters.push_str(&format!(" AND r.job_type = '{}'", tt.replace('\'', "''")));
+    }
+
+    match derived_status {
+        Some("running") => {
+            extra_filters.push_str(" AND COALESCE(rf.has_active, 0) = 1");
+        }
+        Some("partial_success") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 0 \
+                 AND COALESCE(rf.has_failed, 0) = 1 \
+                 AND COALESCE(rf.has_completed, 0) = 1",
+            );
+        }
+        Some("failed") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 0 \
+                 AND COALESCE(rf.has_failed, 0) = 1 \
+                 AND COALESCE(rf.has_completed, 0) = 0",
+            );
+        }
+        Some("completed") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 0 \
+                 AND COALESCE(rf.has_failed, 0) = 0 \
+                 AND COALESCE(rf.has_completed, 0) = 1",
+            );
+        }
+        Some("pending") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 0 \
+                 AND COALESCE(rf.has_failed, 0) = 0 \
+                 AND COALESCE(rf.has_completed, 0) = 0",
+            );
+        }
+        Some(_) => {
+            extra_filters.push_str(" AND 1 = 0");
+        }
+        None => {}
+    }
+
+    #[cfg(feature = "sqlite")]
+    let sql = format!(
+        r#"
+        WITH RECURSIVE
+            descendants AS (
+                SELECT td.parent_job_id AS root_id,
+                       td.child_job_id AS descendant_id
+                FROM task_dependencies td
+                WHERE td.parent_job_id NOT IN (
+                    SELECT child_job_id FROM task_dependencies
+                )
+                UNION ALL
+                SELECT d.root_id, td.child_job_id
+                FROM descendants d
+                JOIN task_dependencies td ON td.parent_job_id = d.descendant_id
+            ),
+            root_flags AS (
+                SELECT
+                    d.root_id,
+                    MAX(CASE WHEN j2.status IN ('Pending','Queued','Running') THEN 1 ELSE 0 END) AS has_active,
+                    MAX(CASE WHEN j2.status IN ('Failed','Killed')              THEN 1 ELSE 0 END) AS has_failed,
+                    MAX(CASE WHEN j2.status = 'Done'                            THEN 1 ELSE 0 END) AS has_completed
+                FROM descendants d
+                JOIN Jobs j2 ON j2.id = d.descendant_id
+                GROUP BY d.root_id
+            )
+        SELECT COUNT(*) AS cnt
+        FROM Jobs r
+        LEFT JOIN root_flags rf ON rf.root_id = r.id
+        WHERE r.id NOT IN (SELECT child_job_id FROM task_dependencies)
+        {extra_filters}
+        "#
+    );
+
+    #[cfg(feature = "postgres")]
+    let sql = format!(
+        r#"
+        WITH RECURSIVE
+            descendants AS (
+                SELECT td.parent_job_id AS root_id,
+                       td.child_job_id AS descendant_id
+                FROM task_dependencies td
+                WHERE td.parent_job_id NOT IN (
+                    SELECT child_job_id FROM task_dependencies
+                )
+                UNION ALL
+                SELECT d.root_id, td.child_job_id
+                FROM descendants d
+                JOIN task_dependencies td ON td.parent_job_id = d.descendant_id
+            ),
+            root_flags AS (
+                SELECT
+                    d.root_id,
+                    BOOL_OR(j2.status IN ('Pending','Queued','Running')) AS has_active,
+                    BOOL_OR(j2.status IN ('Failed','Killed'))            AS has_failed,
+                    BOOL_OR(j2.status = 'Done')                          AS has_completed
+                FROM descendants d
+                JOIN apalis.jobs j2 ON j2.id = d.descendant_id
+                GROUP BY d.root_id
+            )
+        SELECT COUNT(*) AS cnt
+        FROM apalis.jobs r
+        LEFT JOIN root_flags rf ON rf.root_id = r.id
+        WHERE r.id NOT IN (SELECT child_job_id FROM task_dependencies)
+        {extra_filters}
+        "#
+    );
+
+    let stmt = Statement::from_string(db.get_database_backend(), sql);
+    let row = db.query_one(stmt).await?;
+
+    match row {
+        Some(r) => {
+            let cnt: i64 = r.try_get_by_index(0)?;
+            Ok(cnt as u64)
+        }
+        None => Ok(0),
+    }
 }

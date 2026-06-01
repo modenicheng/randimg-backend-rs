@@ -104,13 +104,17 @@ async fn clean_tasks(
             CLEAN_COMPLETED => statuses.push(apalis_job::STATUS_DONE),
             CLEAN_FAILED => statuses.push(apalis_job::STATUS_FAILED),
             CLEAN_CANCELLED => statuses.push(apalis_job::STATUS_KILLED),
-            CLEAN_PENDING => statuses.push(apalis_job::STATUS_PENDING),
+            CLEAN_PENDING => {
+                statuses.push(apalis_job::STATUS_PENDING);
+                statuses.push(apalis_job::STATUS_QUEUED);
+            }
             CLEAN_RUNNING => statuses.push(apalis_job::STATUS_RUNNING),
             CLEAN_ALL => {
                 statuses.push(apalis_job::STATUS_DONE);
                 statuses.push(apalis_job::STATUS_FAILED);
                 statuses.push(apalis_job::STATUS_KILLED);
                 statuses.push(apalis_job::STATUS_PENDING);
+                statuses.push(apalis_job::STATUS_QUEUED);
                 statuses.push(apalis_job::STATUS_RUNNING);
             }
             _ => unreachable!("flag already validated"),
@@ -186,10 +190,11 @@ pub struct ListTasksQuery {
 fn map_status(status: &str) -> &'static str {
     match status {
         apalis_job::STATUS_PENDING => "pending",
+        apalis_job::STATUS_QUEUED => "pending",
         apalis_job::STATUS_RUNNING => "running",
         apalis_job::STATUS_DONE => "completed",
         apalis_job::STATUS_FAILED => "failed",
-        apalis_job::STATUS_KILLED => "failed",
+        apalis_job::STATUS_KILLED => "killed",
         _ => "unknown",
     }
 }
@@ -197,12 +202,12 @@ fn map_status(status: &str) -> &'static str {
 /// Map API status filter to Apalis status string(s).
 fn unmap_status(status: &str) -> Vec<&'static str> {
     match status {
-        "pending" => vec![apalis_job::STATUS_PENDING],
+        "pending" | "queued" => vec![apalis_job::STATUS_PENDING, apalis_job::STATUS_QUEUED],
         "running" => vec![apalis_job::STATUS_RUNNING],
         "completed" => vec![apalis_job::STATUS_DONE],
         "failed" => vec![apalis_job::STATUS_FAILED, apalis_job::STATUS_KILLED],
         "killed" => vec![apalis_job::STATUS_KILLED],
-        _ => vec![apalis_job::STATUS_PENDING],
+        _ => vec![apalis_job::STATUS_PENDING, apalis_job::STATUS_QUEUED],
     }
 }
 
@@ -439,6 +444,11 @@ fn tree_row_to_json(t: &apalis_job::Model) -> serde_json::Value {
 /// `task_dependencies` relationship. Use this to see high-level crawl jobs
 /// without the noise of their subtasks.
 ///
+/// The `status` filter applies to the **derived** status (aggregated from the
+/// entire descendant subtree), not the root's own Apalis status. This means a
+/// root whose own status is "Done" but has failed children will appear as
+/// `"partial_success"`.
+///
 /// # Query Parameters
 ///
 /// Same as `GET /tasks`: `task_type`, `status`, `limit`, `offset`.
@@ -455,25 +465,61 @@ pub async fn list_roots(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let limit = q.limit.unwrap_or(50).min(200);
     let offset = q.offset.unwrap_or(0);
-
-    // Resolve the status filter: user sends lowercase, apalis stores "Pending" etc.
-    let mapped_status = q.status.as_deref().map(|s| match s {
-        "pending"   => apalis_job::STATUS_PENDING,
-        "running"   => apalis_job::STATUS_RUNNING,
-        "completed" => apalis_job::STATUS_DONE,
-        "failed"    => apalis_job::STATUS_FAILED,
-        other       => other, // pass through unknown as-is
-    });
-
     let db = &state.db;
 
+    // Filtering by derived status and pagination are pushed into the SQL CTE.
+    // Run list + count in parallel.
     let (rows, total) = tokio::try_join!(
-        query::task_tree::list_roots(db, q.task_type.as_deref(), mapped_status, limit, offset),
-        query::task_tree::count_roots(db, q.task_type.as_deref(), mapped_status),
+        query::task_tree::list_roots_derived(
+            db,
+            q.task_type.as_deref(),
+            q.status.as_deref(),
+            limit,
+            offset,
+        ),
+        query::task_tree::count_roots_derived(
+            db,
+            q.task_type.as_deref(),
+            q.status.as_deref(),
+        ),
     )
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let items: Vec<serde_json::Value> = rows.iter().map(tree_row_to_json).collect();
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let payload = serde_json::from_slice::<serde_json::Value>(&r.job).ok();
+            let derived = query::task_tree::derived_status_from_flags(
+                r.has_active,
+                r.has_failed,
+                r.has_completed,
+            );
+
+            // If root has no descendants (all flags false), fall back to its own status
+            let effective = if !r.has_active && !r.has_failed && !r.has_completed {
+                map_status(&r.status)
+            } else {
+                derived
+            };
+
+            let run_at = fmt_ts(r.run_at);
+            let done_at = r.done_at.and_then(fmt_ts);
+
+            serde_json::json!({
+                "id": r.id,
+                "job_type": r.job_type,
+                "status": effective,
+                "raw_status": map_status(&r.status),
+                "priority": r.priority,
+                "attempts": r.attempts,
+                "max_attempts": r.max_attempts,
+                "run_at": run_at,
+                "done_at": done_at,
+                "last_result": r.last_result,
+                "payload": payload,
+            })
+        })
+        .collect();
 
     Ok(Json(serde_json::json!({
         "tasks": items,
@@ -550,19 +596,20 @@ pub async fn get_subtasks(
     Path(task_id): Path<String>,
     Query(q): Query<RootsOrSubtasksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let mapped_status = q.status.as_deref().map(|s| match s {
-        "pending"   => apalis_job::STATUS_PENDING,
-        "running"   => apalis_job::STATUS_RUNNING,
-        "completed" => apalis_job::STATUS_DONE,
-        "failed"    => apalis_job::STATUS_FAILED,
-        other       => other,
+    let mapped_status: Option<Vec<&str>> = q.status.as_deref().map(|s| match s {
+        "pending"   => vec![apalis_job::STATUS_PENDING, apalis_job::STATUS_QUEUED],
+        "running"   => vec![apalis_job::STATUS_RUNNING],
+        "completed" => vec![apalis_job::STATUS_DONE],
+        "failed"    => vec![apalis_job::STATUS_FAILED],
+        "killed"    => vec![apalis_job::STATUS_KILLED],
+        other       => vec![other],
     });
 
     let children = query::task_tree::list_subtasks(
         &state.db,
         &task_id,
         q.task_type.as_deref(),
-        mapped_status,
+        mapped_status.as_deref(),
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
