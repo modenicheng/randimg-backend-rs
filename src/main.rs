@@ -75,6 +75,7 @@ async fn main() {
         oss,
         job_storage,
         apalis_pool: apalis_pool.clone(),
+        worker_handles: Arc::new(tokio::sync::Mutex::new(Vec::new())),
     });
 
     // --- Pixiv credential seed & auto-refresh ----------------------------------
@@ -125,6 +126,7 @@ async fn main() {
 
     // --- Apalis workers -------------------------------------------------------
     let worker_handles = spawn_workers(state.clone(), &apalis_pool).await;
+    *state.worker_handles.lock().await = worker_handles;
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -144,7 +146,7 @@ async fn main() {
         .nest_service("/images", ServeDir::new(&config.image_dir))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
-        .with_state(state);
+        .with_state(state.clone());
 
     match &config.server_addr {
         BindAddr::Tcp(addr) => {
@@ -180,11 +182,15 @@ async fn main() {
     }
 
     tracing::info!("Shutting down — aborting Apalis workers…");
-    for h in &worker_handles {
+    let handles = {
+        let mut guard = state.worker_handles.lock().await;
+        std::mem::take(&mut *guard)
+    };
+    for h in &handles {
         h.abort();
     }
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        for h in worker_handles {
+        for h in handles {
             let _ = h.await;
         }
     })
