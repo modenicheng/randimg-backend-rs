@@ -3,7 +3,7 @@ use axum::{
     extract::Path,
     extract::Query,
     extract::State,
-    routing::get,
+    routing::{delete, get},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -17,6 +17,7 @@ use crate::error::AppError;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/tasks", get(list_tasks))
+        .route("/tasks/pending", delete(delete_pending_tasks))
         .route("/tasks/{task_id}", get(get_task).delete(delete_task))
 }
 
@@ -173,4 +174,25 @@ pub async fn delete_task(
     }
 
     Ok(Json(serde_json::json!({ "message": "Task deleted" })))
+}
+
+#[derive(Deserialize)]
+pub struct DeletePendingQuery {
+    pub task_type: Option<String>,
+}
+
+/// DELETE /tasks/pending — Delete all pending tasks, optionally filtered by type
+pub async fn delete_pending_tasks(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Query(q): Query<DeletePendingQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let deleted = query::apalis_job::delete_pending(&state.db, q.task_type.as_deref())
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "message": "Pending tasks deleted",
+        "deleted": deleted,
+    })))
 }
