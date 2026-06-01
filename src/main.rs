@@ -228,8 +228,8 @@ async fn spawn_workers(
             let handle = tokio::spawn(async move {
                 let worker = WorkerBuilder::new($name)
                     .backend(storage)
-                    .data(Data::new(state.clone()))
-                    .data(Data::new(js_clone))
+                    .data(state.clone())
+                    .data(js_clone.clone())
                     .concurrency($concurrency)
                     .retry(RetryPolicy::retries(3))
                     .enable_tracing()
