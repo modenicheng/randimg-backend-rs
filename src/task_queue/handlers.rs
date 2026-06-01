@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use apalis::prelude::*;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
+use ulid::Ulid;
 
 use crate::AppState;
 use crate::db::query;
@@ -12,15 +13,39 @@ use crate::pixiv::PixivApi;
 use super::jobs::*;
 
 // ---------------------------------------------------------------------------
+// Hierarchy recording helper
+// ---------------------------------------------------------------------------
+
+/// Record the parent-child relationship for the current job.
+///
+/// Called at the start of each handler. If `parent_job_id` is set in the job
+/// payload, inserts a `task_dependencies` record linking parent → current job.
+async fn record_hierarchy(db: &sea_orm::DatabaseConnection, current_id: &str, parent_id: Option<&str>) {
+    if let Some(pid) = parent_id {
+        if let Err(e) = query::task_dependency::record(db, pid, current_id).await {
+            tracing::warn!(
+                parent = pid,
+                child = current_id,
+                "Failed to record task hierarchy: {}",
+                e
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Job handlers
 // ---------------------------------------------------------------------------
 
 /// Crawl Pixiv illustrations (by user, ranking, or bookmarks).
 pub async fn handle_crawl(
     job: CrawlJob,
+    task_id: TaskId<Ulid>,
     state: Data<Arc<AppState>>,
     storage: Data<JobStorage>,
 ) -> Result<(), BoxDynError> {
+    let current_id = task_id.to_string();
+    record_hierarchy(&state.db, &current_id, job.parent_job_id.as_deref()).await;
     let crawl_type = job.crawl_type;
     let crawler_id = job.crawler_id;
 
@@ -46,9 +71,9 @@ pub async fn handle_crawl(
     }
 
     let result = match crawl_type {
-        0 => crawl_ranking(&state, &api, &job, &storage).await,
-        1 => crawl_user(&state, &api, &job, &storage).await,
-        2 => crawl_bookmarks(&state, &api, &job, &storage).await,
+        0 => crawl_ranking(&state, &api, &job, &storage, &current_id).await,
+        1 => crawl_user(&state, &api, &job, &storage, &current_id).await,
+        2 => crawl_bookmarks(&state, &api, &job, &storage, &current_id).await,
         _ => Err(format!("Unknown crawl_type: {}", crawl_type)),
     };
 
@@ -70,6 +95,7 @@ pub async fn handle_crawl(
                     max_hops: None,
                     seed_limit: None,
                     seed_method: None,
+                    parent_job_id: Some(current_id.clone()),
                 })
                 .await
             {
@@ -89,6 +115,7 @@ async fn crawl_ranking(
     api: &PixivApi,
     job: &CrawlJob,
     storage: &JobStorage,
+    parent_id: &str,
 ) -> Result<(), String> {
     let start_date = job.target_start_date.as_deref();
     let date = start_date.map(|s| if s.len() >= 10 { &s[..10] } else { s });
@@ -116,6 +143,7 @@ async fn crawl_ranking(
                         image_id: dl.image_id,
                         source_image_url: dl.source_image_url,
                         image_path: dl.image_path,
+                        parent_job_id: Some(parent_id.to_string()),
                     })
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
@@ -136,6 +164,7 @@ async fn crawl_user(
     api: &PixivApi,
     job: &CrawlJob,
     storage: &JobStorage,
+    parent_id: &str,
 ) -> Result<(), String> {
     let user_id = job
         .target_user_id
@@ -166,6 +195,7 @@ async fn crawl_user(
                         image_id: dl.image_id,
                         source_image_url: dl.source_image_url,
                         image_path: dl.image_path,
+                        parent_job_id: Some(parent_id.to_string()),
                     })
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
@@ -186,6 +216,7 @@ async fn crawl_bookmarks(
     api: &PixivApi,
     job: &CrawlJob,
     storage: &JobStorage,
+    parent_id: &str,
 ) -> Result<(), String> {
     let user_id = api
         .user_id()
@@ -216,6 +247,7 @@ async fn crawl_bookmarks(
                         image_id: dl.image_id,
                         source_image_url: dl.source_image_url,
                         image_path: dl.image_path,
+                        parent_job_id: Some(parent_id.to_string()),
                     })
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
@@ -284,7 +316,21 @@ async fn save_illust(
             .await
             .map_err(|e| e.to_string())?;
 
-        if existing.is_some() {
+        if let Some(existing) = existing {
+            // Update engagement metrics for existing images
+            let new_view = illust.total_view.unwrap_or(0) as i64;
+            let new_bookmarks = illust.total_bookmarks.unwrap_or(0) as i64;
+            let new_comments = illust.total_comments.unwrap_or(0) as i64;
+            if new_view != existing.total_view
+                || new_bookmarks != existing.total_bookmarks
+                || new_comments != existing.total_comments
+            {
+                let mut active: crate::db::entities::image::ActiveModel = existing.into();
+                active.total_view = sea_orm::Set(new_view);
+                active.total_bookmarks = sea_orm::Set(new_bookmarks);
+                active.total_comments = sea_orm::Set(new_comments);
+                let _ = active.update(db).await;
+            }
             continue;
         }
 
@@ -392,8 +438,12 @@ fn extract_param_from_url(url: &str, param: &str) -> Option<String> {
 /// Download a single image from Pixiv to local disk.
 pub async fn handle_download(
     job: DownloadJob,
+    task_id: TaskId<Ulid>,
     state: Data<Arc<AppState>>,
 ) -> Result<(), BoxDynError> {
+    let current_id = task_id.to_string();
+    record_hierarchy(&state.db, &current_id, job.parent_job_id.as_deref()).await;
+
     let client = reqwest::Client::new();
     let resp = client
         .get(&job.source_image_url)
@@ -430,8 +480,12 @@ pub async fn handle_download(
 /// Extract color palette from a downloaded image.
 pub async fn handle_color_extract(
     job: ColorExtractJob,
+    task_id: TaskId<Ulid>,
     state: Data<Arc<AppState>>,
 ) -> Result<(), BoxDynError> {
+    let current_id = task_id.to_string();
+    record_hierarchy(&state.db, &current_id, job.parent_job_id.as_deref()).await;
+
     let file_path = format!("{}/{}", state.config.image_dir, job.image_path);
     let img = ::image::open(&file_path).map_err(|e| format!("Failed to open image: {}", e))?;
 
@@ -488,7 +542,10 @@ pub async fn handle_color_extract(
 }
 
 /// Upload a downloaded image to DogeCloud OSS.
-pub async fn handle_upload(job: UploadJob, state: Data<Arc<AppState>>) -> Result<(), BoxDynError> {
+pub async fn handle_upload(job: UploadJob, task_id: TaskId<Ulid>, state: Data<Arc<AppState>>) -> Result<(), BoxDynError> {
+    let current_id = task_id.to_string();
+    record_hierarchy(&state.db, &current_id, job.parent_job_id.as_deref()).await;
+
     let file_path = format!("{}/{}", state.config.image_dir, job.image_path);
     let bytes = tokio::fs::read(&file_path)
         .await
@@ -524,8 +581,12 @@ pub async fn handle_upload(job: UploadJob, state: Data<Arc<AppState>>) -> Result
 /// Check image accessibility (stub — marks image as accessible).
 pub async fn handle_accessibility_check(
     job: AccessibilityCheckJob,
+    task_id: TaskId<Ulid>,
     state: Data<Arc<AppState>>,
 ) -> Result<(), BoxDynError> {
+    let current_id = task_id.to_string();
+    record_hierarchy(&state.db, &current_id, job.parent_job_id.as_deref()).await;
+
     use crate::db::entities::image::{self, Entity as Image};
     if let Some(img_model) = Image::find_by_id(job.image_id)
         .one(&state.db)
@@ -543,9 +604,13 @@ pub async fn handle_accessibility_check(
 /// Discover related illustrations via Pixiv related-illust API.
 pub async fn handle_discover(
     job: DiscoverJob,
+    task_id: TaskId<Ulid>,
     state: Data<Arc<AppState>>,
     storage: Data<JobStorage>,
 ) -> Result<(), BoxDynError> {
+    let current_id = task_id.to_string();
+    record_hierarchy(&state.db, &current_id, job.parent_job_id.as_deref()).await;
+
     let hop = job.hop;
     let max_hops = job.max_hops.unwrap_or(state.config.max_discover_hops);
     let seed_limit = job.seed_limit.unwrap_or(state.config.discover_seed_limit);
@@ -611,6 +676,7 @@ pub async fn handle_discover(
                         image_id: dl.image_id,
                         source_image_url: dl.source_image_url,
                         image_path: dl.image_path,
+                        parent_job_id: Some(current_id.clone()),
                     })
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
@@ -629,6 +695,7 @@ pub async fn handle_discover(
                 max_hops: Some(max_hops),
                 seed_limit: Some(seed_limit),
                 seed_method: job.seed_method.clone(),
+                parent_job_id: Some(current_id.clone()),
             })
             .await
             .map_err(|e| format!("Failed to submit next discover task: {}", e))?;
@@ -644,8 +711,12 @@ pub async fn handle_discover(
 /// Refresh a Pixiv credential's OAuth token.
 pub async fn handle_refresh_pixiv_token(
     job: RefreshPixivTokenJob,
+    task_id: TaskId<Ulid>,
     state: Data<Arc<AppState>>,
 ) -> Result<(), BoxDynError> {
+    let current_id = task_id.to_string();
+    record_hierarchy(&state.db, &current_id, job.parent_job_id.as_deref()).await;
+
     let credential_id = job.credential_id;
 
     let cred = query::pixiv_credential::find_by_id(&state.db, credential_id)

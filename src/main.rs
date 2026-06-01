@@ -110,6 +110,7 @@ async fn main() {
                     .job_storage
                     .push_refresh_pixiv_token(RefreshPixivTokenJob {
                         credential_id: cred.id,
+                        parent_job_id: None,
                     })
                     .await
                 {
@@ -139,6 +140,7 @@ async fn main() {
         .merge(handlers::author::routes())
         .merge(handlers::crawler::routes())
         .merge(handlers::task::routes())
+        .merge(handlers::task_tree::routes())
         .merge(handlers::pixiv_credential::routes())
         .nest_service("/images", ServeDir::new(&config.image_dir))
         .layer(TraceLayer::new_for_http())

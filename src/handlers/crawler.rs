@@ -76,6 +76,7 @@ pub async fn create_crawler(
             target_start_date: body.target_start_date.map(|d| d.to_string()),
             target_end_date: body.target_end_date.map(|d| d.to_string()),
             target_search_prompt: body.target_search_prompt,
+            parent_job_id: None,
         })
         .await
         .map_err(|e| AppError::Internal(e))?;
@@ -139,6 +140,7 @@ pub async fn get_crawler_image(
                 .push_color_extract(ColorExtractJob {
                     image_id: img.id,
                     image_path: img.image_path,
+                    parent_job_id: None,
                 })
                 .await
                 .map_err(|e| AppError::Internal(e))?;
@@ -178,6 +180,7 @@ pub async fn trigger_discover(
             max_hops: body.max_hops,
             seed_limit: body.seed_limit,
             seed_method: body.seed_method,
+            parent_job_id: None,
         })
         .await
         .map_err(|e| AppError::Internal(e))?;
@@ -210,6 +213,7 @@ pub async fn get_accessibility_queue(
                 .push_accessibility_check(AccessibilityCheckJob {
                     image_id: img.id,
                     image_path: img.image_path,
+                    parent_job_id: None,
                 })
                 .await
                 .map_err(|e| AppError::Internal(e))?;

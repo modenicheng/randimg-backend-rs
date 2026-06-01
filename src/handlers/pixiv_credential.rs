@@ -167,7 +167,7 @@ pub async fn refresh_credential(
 
     state
         .job_storage
-        .push_refresh_pixiv_token(RefreshPixivTokenJob { credential_id: id })
+        .push_refresh_pixiv_token(RefreshPixivTokenJob { credential_id: id, parent_job_id: None })
         .await
         .map_err(|e| AppError::Internal(e))?;
 

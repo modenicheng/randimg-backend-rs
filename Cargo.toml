@@ -68,6 +68,7 @@ apalis = { version = "1.0.0-rc.9", features = ["retry", "tracing"] }
 apalis-sqlite = { version = "1.0.0-rc.8", default-features = false, features = ["tokio-comp", "migrate", "json", "chrono"], optional = true }
 apalis-postgres = { version = "1.0.0-rc.8", default-features = false, features = ["tokio-comp", "migrate", "chrono"], optional = true }
 apalis-codec = { version = "0.1.0-rc.9", features = ["json"] }
+ulid = "1"
 
 # Direct sqlx for querying Apalis Jobs table
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls"] }
