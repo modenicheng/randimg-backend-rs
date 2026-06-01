@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Randimg is a Rust backend that crawls images from Pixiv, extracts color palettes via KMeans clustering in CIELAB space, and serves them through an HTTP API. It uses SeaORM with SQLite (dev) / PostgreSQL (prod), Axum for the web layer, and a SQL-backed task queue for background work (crawling, downloading, color extraction).
+Randimg is a Rust backend that crawls images from Pixiv, extracts color palettes via KMeans clustering in CIELAB space, and serves them through an HTTP API. It uses SeaORM with SQLite (dev) / PostgreSQL (prod), Axum for the web layer, and Apalis for background job processing (crawling, downloading, color extraction).
 
 ## Build & Run
 
@@ -38,7 +38,7 @@ cargo run --example color_extract_demo -- path/to/image.jpg
 
 ### Task queue (`src/task_queue/`)
 
-Background tasks are stored in the `background_tasks` table. Six tokio workers poll every 5 seconds, each handling one task type: `crawl`, `download`, `color_extract`, `upload`, `accessibility_check`, `discover`. Task claim is atomic (raw SQL `UPDATE ... WHERE id = (SELECT ... LIMIT 1) RETURNING`). Failed tasks retry up to 3 times.
+Uses the Apalis library with `apalis-sqlite` (dev) / `apalis-postgres` (prod) for job storage. Seven workers, one per job type: `crawl`, `download`, `color_extract`, `upload`, `accessibility_check`, `discover`, `refresh_pixiv_token`. Jobs are defined as structs in `src/task_queue/jobs.rs`, handlers live in `src/task_queue/handlers.rs`, and workers are spawned via the `spawn_worker!` macro in `src/main.rs`. Failed tasks retry up to 3 times (Apalis built-in). The backend abstraction (`Pool`, `JobStorage`, `init()`) lives in `src/db_backend.rs`.
 
 ### Color pipeline (`src/color/`)
 
@@ -57,7 +57,10 @@ All settings come from environment variables (loaded via `dotenvy`). The app pan
 - **`src/main.rs`** — Entry point: config, tracing setup, DB init, task runner startup, Axum router definition, graceful shutdown.
 - **`src/lib.rs`** — Crate root: re-exports all modules, defines `AppState` (shared DB connection + config).
 - **`src/error.rs`** — `AppError` enum with `IntoResponse`; `From<DbErr>` for automatic conversion.
-- **`src/task_queue/mod.rs`** — `submit_task`, `claim_next_task`, `complete_task`, `fail_task`.
+- **`src/db_backend.rs`** — Database backend abstraction: `Pool` type, `JobStorage` (holds typed job storages), `init()` to connect and set up Apalis.
+- **`src/task_queue/jobs.rs`** — Job struct definitions (one per task type).
+- **`src/task_queue/handlers.rs`** — Job handler functions (one per task type).
+- **`src/task_queue/mod.rs`** — Re-exports jobs and handlers.
 - **`src/db/query/image.rs`** — Most complex query file: random selection, paginated list with popularity scoring, color search with bounding-box pre-filter, discover seed selection.
 - **`src/color/kmeans.rs`** — KMeans++ with empty-cluster recovery and parallel chunk assignment.
 - **`src/handlers/image.rs`** — Image serving with path traversal protection (canonicalize + prefix check).
@@ -79,6 +82,6 @@ See `.env.example` for the full list. Critical ones:
 
 - Error handling: return `AppError` variants, not raw `StatusCode`. Internal errors are logged at ERROR level before returning a sanitized message.
 - Batch-fetch associations to avoid N+1 queries (see `list_images` in `db/query/image.rs`).
-- New task types: add variant to `TaskType` in `db/entities/task.rs`, add runner branch in `task_queue/runner.rs`, add task logic in `task_queue/tasks/`.
+- New task types: define a job struct in `task_queue/jobs.rs`, add a handler in `task_queue/handlers.rs`, add a storage field in `db_backend.rs::JobStorage`, register a worker in `main.rs::spawn_workers()`.
 - Routes are registered in `main.rs` inside `build_router()`.
 - Use `tracing` macros (`info!`, `error!`, `debug!`) — not `println!`.

@@ -17,12 +17,11 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // SQLite does not support DROP COLUMN before 3.35.0; for simplicity
-        // we recreate the table without the column. In production on PostgreSQL
-        // a simple ALTER TABLE images DROP COLUMN deleted_at would suffice.
+        // Silently ignore failure — SQLite < 3.35.0 does not support DROP COLUMN.
+        // On PostgreSQL this will succeed and remove the column.
         let db = manager.get_connection();
-        db.execute_unprepared("ALTER TABLE images DROP COLUMN deleted_at")
-            .await?;
+        let _ = db.execute_unprepared("ALTER TABLE images DROP COLUMN deleted_at")
+            .await;
         Ok(())
     }
 }

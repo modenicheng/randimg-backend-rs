@@ -4,6 +4,9 @@
 //! here. The rest of the codebase uses the exported types (`Pool`, `JobStorage`,
 //! `init()`) without caring which backend is active.
 
+#[cfg(all(feature = "sqlite", feature = "postgres"))]
+compile_error!("Features 'sqlite' and 'postgres' are mutually exclusive. Use --no-default-features when enabling postgres.");
+
 use std::sync::Arc;
 
 use apalis::prelude::*;
@@ -73,6 +76,7 @@ impl JobStorage {
     /// This is intended for tests that need a functional `AppState` without
     /// connecting to an external database. The pool is ephemeral and will be
     /// dropped when the returned `JobStorage` is dropped.
+    #[cfg(feature = "sqlite")]
     pub async fn new_for_test() -> Self {
         let pool = apalis_sqlite::SqlitePool::connect("sqlite::memory:")
             .await

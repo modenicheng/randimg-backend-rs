@@ -74,7 +74,7 @@ impl AppConfig {
 
         Self {
             database_url: env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite://data/randimg.db?mode=rune".into()),
+                .unwrap_or_else(|_| "sqlite://data/randimg.db?mode=rwc".into()),
             secret_key,
             jwt_expire_minutes: env::var("JWT_EXPIRE_MINUTES")
                 .ok()

@@ -1,3 +1,6 @@
+#[cfg(all(feature = "sqlite", feature = "postgres"))]
+compile_error!("Features 'sqlite' and 'postgres' are mutually exclusive. Use --no-default-features when enabling postgres.");
+
 pub use sea_orm_migration::prelude::*;
 
 mod m20260531_000001_create_base_tables;
