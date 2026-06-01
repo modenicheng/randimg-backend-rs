@@ -73,8 +73,19 @@ impl AppConfig {
         }
 
         Self {
-            database_url: env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite://data/randimg.db?mode=rwc".into()),
+            database_url: {
+                let url = env::var("DATABASE_URL")
+                    .unwrap_or_else(|_| "sqlite://data/randimg.db?mode=rwc".into());
+                #[cfg(feature = "sqlite")]
+                if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+                    panic!("Compiled with sqlite feature but DATABASE_URL is a PostgreSQL URL. Rebuild with --features postgres --no-default-features.");
+                }
+                #[cfg(feature = "postgres")]
+                if url.starts_with("sqlite://") {
+                    panic!("Compiled with postgres feature but DATABASE_URL is a SQLite URL. Rebuild with --features sqlite (default).");
+                }
+                url
+            },
             secret_key,
             jwt_expire_minutes: env::var("JWT_EXPIRE_MINUTES")
                 .ok()

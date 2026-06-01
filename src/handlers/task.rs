@@ -15,9 +15,7 @@ use crate::error::AppError;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/tasks", get(list_tasks))
-        .route("/tasks/{task_id}", get(get_task))
-    // Note: manual retry is no longer needed — Apalis handles retries automatically.
-    // Failed tasks can be re-pushed via the relevant API endpoint.
+        .route("/tasks/{task_id}", get(get_task).delete(delete_task))
 }
 
 #[derive(Deserialize)]
@@ -59,7 +57,7 @@ fn unmap_status(status: &str) -> i32 {
 // ---------------------------------------------------------------------------
 
 const SELECT_COLS: &str =
-    "id, job_type, status, attempts, retries, run_at, done_at, last_result, priority";
+    "SELECT id, job_type, status, attempts, retries, run_at, done_at, last_result, priority";
 
 #[cfg(feature = "sqlite")]
 const JOBS_TABLE: &str = "Jobs";
@@ -242,6 +240,95 @@ async fn fetch_tasks(
     }
 }
 
+async fn count_tasks(
+    pool: &crate::ApalisPool,
+    task_type: Option<&str>,
+    status: Option<i32>,
+) -> Result<i64, sqlx::Error> {
+    match (task_type, status) {
+        (Some(tt), Some(st)) => {
+            #[cfg(feature = "sqlite")]
+            {
+                sqlx::query_scalar::<_, i64>(&format!(
+                    "SELECT COUNT(*) FROM {JOBS_TABLE} WHERE job_type = ?1 AND status = ?2"
+                ))
+                .bind(tt)
+                .bind(st)
+                .fetch_one(pool)
+                .await
+            }
+            #[cfg(feature = "postgres")]
+            {
+                sqlx::query_scalar::<_, i64>(&format!(
+                    "SELECT COUNT(*) FROM {JOBS_TABLE} WHERE job_type = $1 AND status = $2"
+                ))
+                .bind(tt)
+                .bind(st)
+                .fetch_one(pool)
+                .await
+            }
+        }
+        (Some(tt), None) => {
+            #[cfg(feature = "sqlite")]
+            {
+                sqlx::query_scalar::<_, i64>(&format!(
+                    "SELECT COUNT(*) FROM {JOBS_TABLE} WHERE job_type = ?1"
+                ))
+                .bind(tt)
+                .fetch_one(pool)
+                .await
+            }
+            #[cfg(feature = "postgres")]
+            {
+                sqlx::query_scalar::<_, i64>(&format!(
+                    "SELECT COUNT(*) FROM {JOBS_TABLE} WHERE job_type = $1"
+                ))
+                .bind(tt)
+                .fetch_one(pool)
+                .await
+            }
+        }
+        (None, Some(st)) => {
+            #[cfg(feature = "sqlite")]
+            {
+                sqlx::query_scalar::<_, i64>(&format!(
+                    "SELECT COUNT(*) FROM {JOBS_TABLE} WHERE status = ?1"
+                ))
+                .bind(st)
+                .fetch_one(pool)
+                .await
+            }
+            #[cfg(feature = "postgres")]
+            {
+                sqlx::query_scalar::<_, i64>(&format!(
+                    "SELECT COUNT(*) FROM {JOBS_TABLE} WHERE status = $1"
+                ))
+                .bind(st)
+                .fetch_one(pool)
+                .await
+            }
+        }
+        (None, None) => {
+            #[cfg(feature = "sqlite")]
+            {
+                sqlx::query_scalar::<_, i64>(&format!(
+                    "SELECT COUNT(*) FROM {JOBS_TABLE}"
+                ))
+                .fetch_one(pool)
+                .await
+            }
+            #[cfg(feature = "postgres")]
+            {
+                sqlx::query_scalar::<_, i64>(&format!(
+                    "SELECT COUNT(*) FROM {JOBS_TABLE}"
+                ))
+                .fetch_one(pool)
+                .await
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // row_to_json helper (no cfg needed — uses feature-gated fmt_* functions)
 // ---------------------------------------------------------------------------
@@ -270,7 +357,7 @@ pub async fn list_tasks(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
     Query(q): Query<ListTasksQuery>,
-) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let limit = q.limit.unwrap_or(50).min(200) as i64;
     let offset = q.offset.unwrap_or(0) as i64;
 
@@ -278,19 +365,18 @@ pub async fn list_tasks(
 
     let mapped_status = q.status.as_deref().map(unmap_status);
 
-    let rows = fetch_tasks(
-        pool,
-        q.task_type.as_deref(),
-        mapped_status,
-        limit,
-        offset,
+    let (rows, total) = tokio::try_join!(
+        fetch_tasks(pool, q.task_type.as_deref(), mapped_status, limit, offset),
+        count_tasks(pool, q.task_type.as_deref(), mapped_status),
     )
-    .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let result: Vec<serde_json::Value> = rows.iter().map(row_to_json).collect();
 
-    Ok(Json(result))
+    Ok(Json(serde_json::json!({
+        "tasks": result,
+        "total": total,
+    })))
 }
 
 /// GET /tasks/:id — Get a single task by ID
@@ -327,4 +413,37 @@ pub async fn get_task(
         Some(t) => Ok(Json(row_to_json(&t))),
         None => Err(AppError::NotFound(format!("Task {} not found", task_id))),
     }
+}
+
+/// DELETE /tasks/:id — Delete (cancel) a task by ID
+pub async fn delete_task(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Path(task_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let pool = &state.apalis_pool;
+
+    let result = {
+        #[cfg(feature = "sqlite")]
+        {
+            sqlx::query(&format!("DELETE FROM {JOBS_TABLE} WHERE id = ?1"))
+                .bind(&task_id)
+                .execute(pool)
+                .await
+        }
+        #[cfg(feature = "postgres")]
+        {
+            sqlx::query(&format!("DELETE FROM {JOBS_TABLE} WHERE id = $1"))
+                .bind(&task_id)
+                .execute(pool)
+                .await
+        }
+    }
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!("Task {} not found", task_id)));
+    }
+
+    Ok(Json(serde_json::json!({ "message": "Task deleted" })))
 }
