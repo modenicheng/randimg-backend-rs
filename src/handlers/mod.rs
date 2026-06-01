@@ -7,3 +7,4 @@ pub mod pixiv_credential;
 pub mod statistic;
 pub mod tag;
 pub mod task;
+pub mod task_tree;
