@@ -52,6 +52,7 @@ impl ActiveModelBehavior for ActiveModel {}
 
 /// Apalis status constants (stored as TEXT in the Jobs table).
 pub const STATUS_PENDING: &str = "Pending";
+pub const STATUS_QUEUED: &str = "Queued";
 pub const STATUS_RUNNING: &str = "Running";
 pub const STATUS_DONE: &str = "Done";
 pub const STATUS_FAILED: &str = "Failed";

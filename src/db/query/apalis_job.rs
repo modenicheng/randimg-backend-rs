@@ -65,7 +65,12 @@ pub async fn delete_pending(
     db: &DatabaseConnection,
     task_type: Option<&str>,
 ) -> Result<u64, DbErr> {
-    delete_by_statuses(db, &[apalis_job::STATUS_PENDING], task_type).await
+    delete_by_statuses(
+        db,
+        &[apalis_job::STATUS_PENDING, apalis_job::STATUS_QUEUED],
+        task_type,
+    )
+    .await
 }
 
 /// Bulk-delete jobs by statuses.
