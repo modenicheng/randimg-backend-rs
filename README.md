@@ -125,9 +125,24 @@ cargo test
 | DELETE | `/tags/{id}` | 删除标签 |
 | GET/POST | `/crawler` | 爬虫任务管理 |
 | POST | `/crawler/discover` | 触发自主发现 |
-| GET | `/tasks` | 后台任务列表 |
 | GET/POST | `/pixiv-credential` | Pixiv 凭证管理 |
 | POST | `/pixiv-credential/{id}/refresh` | 刷新 Token |
+
+### 任务管理接口（需 AuthUser）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/tasks` | 后台任务列表（支持 task_type/status/limit/offset 过滤） |
+| GET | `/tasks/{id}` | 获取单个任务详情 |
+| DELETE | `/tasks/{id}` | 删除单个任务 |
+| POST | `/tasks/clean` | 按状态批量清理任务（flags: completed/failed/cancelled/pending/running/all） |
+| DELETE | `/tasks/pending` | 删除所有等待中的任务（支持 task_type 过滤） |
+| GET | `/tasks/roots` | 获取根任务（无父任务的任务） |
+| GET | `/tasks/{id}/tree` | 获取任务树（递归子任务） |
+| GET | `/tasks/{id}/subtasks` | 获取直接子任务列表 |
+| DELETE | `/tasks/{id}/subtasks` | 中断所有等待中的子任务 |
+
+完整 API 文档见 [docs/api.md](docs/api.md)。
 
 ## 架构
 

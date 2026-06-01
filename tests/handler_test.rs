@@ -32,6 +32,10 @@ fn make_test_config() -> AppConfig {
         log_json: false,
         max_discover_hops: 3,
         discover_seed_limit: 5,
+        retry_max_retries: 3,
+        retry_backoff_min_ms: 100,
+        retry_backoff_max_secs: 30,
+        retry_backoff_jitter: 0.2,
         dogecloud_access_key: "".into(),
         dogecloud_secret_key: "".into(),
         dogecloud_s3_bucket: "".into(),
@@ -65,6 +69,7 @@ async fn build_test_router(db: DatabaseConnection, config: AppConfig) -> axum::R
         oss: randimg_backend_rs::dogecloud::DogeCloudOss::new_noop(),
         job_storage,
         apalis_pool,
+        worker_handles: Arc::new(tokio::sync::Mutex::new(Vec::new())),
     });
 
     axum::Router::new()

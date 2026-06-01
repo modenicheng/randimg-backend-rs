@@ -31,10 +31,44 @@ pub struct CleanTasksRequest {
     pub task_type: Option<String>,
 }
 
-/// POST /tasks/clean
+/// POST /tasks/clean — Bulk-delete tasks by status flags.
 ///
-/// Bulk-delete tasks by status flags. Supports: completed, failed, cancelled, pending, running, all.
-/// The "running" and "all" flags will abort all workers before deleting.
+/// Accepts a JSON body with a `flags` array specifying which task states to purge.
+/// Optionally filters by `task_type` to only clean tasks of a specific job type.
+///
+/// # Flags
+///
+/// | Flag        | Deletes                        | Side effects       |
+/// |-------------|--------------------------------|--------------------|
+/// | `completed` | Done tasks                     | None               |
+/// | `failed`    | Failed tasks (retries exhausted)| None              |
+/// | `cancelled` | Killed tasks (manually terminated)| None            |
+/// | `pending`   | Pending tasks                  | None               |
+/// | `running`   | Running tasks                  | Aborts all workers, then re-spawns |
+/// | `all`       | All of the above               | Aborts all workers, then re-spawns |
+///
+/// Worker abort only happens when `task_type` is **not** set — aborting workers
+/// for a filtered subset is not supported since workers are shared across types.
+///
+/// # Request
+///
+/// ```json
+/// {
+///   "flags": ["completed", "failed"],
+///   "task_type": "crawl"       // optional
+/// }
+/// ```
+///
+/// # Response (200)
+///
+/// ```json
+/// { "deleted": 42, "flags": ["completed", "failed"] }
+/// ```
+///
+/// # Errors
+///
+/// - `400` — empty flags or invalid flag value
+/// - `401` — missing or invalid auth token
 async fn clean_tasks(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -232,7 +266,38 @@ fn row_to_json(t: &apalis_job::Model) -> serde_json::Value {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// GET /tasks — List background tasks with optional filters
+/// GET /tasks — List background tasks with optional filters.
+///
+/// # Query Parameters
+///
+/// | Param       | Type   | Default | Description                        |
+/// |-------------|--------|---------|------------------------------------|
+/// | `task_type` | string | —       | Filter by job type (e.g. `crawl`, `download`, `color_extract`) |
+/// | `status`    | string | —       | Filter by status: `pending`, `running`, `completed`, `failed` |
+/// | `limit`     | int    | 50      | Page size (max 200)                |
+/// | `offset`    | int    | 0       | Pagination offset                  |
+///
+/// # Response (200)
+///
+/// ```json
+/// {
+///   "tasks": [
+///     {
+///       "id": "01HZ...",
+///       "job_type": "crawl",
+///       "status": "completed",
+///       "priority": 0,
+///       "attempts": 1,
+///       "max_attempts": 4,
+///       "run_at": "2026-06-01 12:00:00",
+///       "done_at": "2026-06-01 12:05:00",
+///       "last_result": null,
+///       "payload": { ... }
+///     }
+///   ],
+///   "total": 128
+/// }
+/// ```
 pub async fn list_tasks(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -258,7 +323,16 @@ pub async fn list_tasks(
     })))
 }
 
-/// GET /tasks/:id — Get a single task by ID
+/// GET /tasks/{id} — Get a single task by ID.
+///
+/// # Response (200)
+///
+/// Same shape as a single element in the `list_tasks` response array.
+///
+/// # Errors
+///
+/// - `404` — task not found
+/// - `401` — missing or invalid auth token
 pub async fn get_task(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -274,7 +348,21 @@ pub async fn get_task(
     }
 }
 
-/// DELETE /tasks/:id — Delete (cancel) a task by ID
+/// DELETE /tasks/{id} — Delete (cancel) a task by ID.
+///
+/// Removes the task from the queue. If the task is currently running, the worker
+/// will fail on its next poll (the job row is gone). Dependency rows in
+/// `task_dependencies` are also cleaned up.
+///
+/// # Response (200)
+///
+/// ```json
+/// { "message": "Task deleted" }
+/// ```
+///
+/// # Errors
+///
+/// - `404` — task not found
 pub async fn delete_task(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -296,7 +384,22 @@ pub struct DeletePendingQuery {
     pub task_type: Option<String>,
 }
 
-/// DELETE /tasks/pending — Delete all pending tasks, optionally filtered by type
+/// DELETE /tasks/pending — Delete all pending tasks, optionally filtered by type.
+///
+/// Convenience shortcut equivalent to `POST /tasks/clean` with `flags: ["pending"]`.
+/// Also cleans up orphaned `task_dependencies` rows.
+///
+/// # Query Parameters
+///
+/// | Param       | Type   | Description                           |
+/// |-------------|--------|---------------------------------------|
+/// | `task_type` | string | Optional: only delete pending tasks of this type |
+///
+/// # Response (200)
+///
+/// ```json
+/// { "message": "Pending tasks deleted", "deleted": 15 }
+/// ```
 pub async fn delete_pending_tasks(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -332,8 +435,19 @@ fn tree_row_to_json(t: &apalis_job::Model) -> serde_json::Value {
 
 /// GET /tasks/roots — Root tasks (jobs without a parent), with filters and pagination.
 ///
-/// Response:
-/// { "tasks": [...], "total": int }
+/// Returns only top-level tasks — jobs that are NOT children in any
+/// `task_dependencies` relationship. Use this to see high-level crawl jobs
+/// without the noise of their subtasks.
+///
+/// # Query Parameters
+///
+/// Same as `GET /tasks`: `task_type`, `status`, `limit`, `offset`.
+///
+/// # Response (200)
+///
+/// ```json
+/// { "tasks": [...job objects...], "total": 5 }
+/// ```
 pub async fn list_roots(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -371,8 +485,25 @@ pub async fn list_roots(
 
 /// GET /tasks/{id}/tree — Nested tree rooted at the given task ID.
 ///
-/// Returns the full recursive hierarchy, with job details at each node.
-/// Response: { "root_job_id": "...", "children": [ { job: {...}, children: [...] }, ... ] }
+/// Returns the full recursive hierarchy of subtasks. Each node contains the
+/// job details and a `children` array of its own subtasks. Useful for
+/// visualizing the entire crawl→download→extract pipeline of a single crawl job.
+///
+/// # Response (200)
+///
+/// ```json
+/// {
+///   "root_job_id": "01HZ...",
+///   "children": [
+///     {
+///       "job": { "id": "...", "job_type": "download", "status": "completed", ... },
+///       "children": [
+///         { "job": { "id": "...", "job_type": "color_extract", ... }, "children": [] }
+///       ]
+///     }
+///   ]
+/// }
+/// ```
 pub async fn get_task_tree(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -397,8 +528,22 @@ pub async fn get_task_tree(
 
 /// GET /tasks/{id}/subtasks — Flat list of direct children of the given task.
 ///
-/// Response:
-/// { "parent_job_id": "...", "subtasks": [...job objects...], "total": int }
+/// Unlike `/tasks/{id}/tree`, this returns only one level of children (not recursive).
+/// Supports optional `task_type` and `status` filters, plus `limit`/`offset` pagination.
+///
+/// # Query Parameters
+///
+/// Same as `GET /tasks`: `task_type`, `status`, `limit`, `offset`.
+///
+/// # Response (200)
+///
+/// ```json
+/// {
+///   "parent_job_id": "01HZ...",
+///   "subtasks": [...job objects...],
+///   "total": 12
+/// }
+/// ```
 pub async fn get_subtasks(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -450,12 +595,25 @@ pub struct InterruptSubtasksQuery {
 
 /// DELETE /tasks/{id}/subtasks — Delete all **pending** children of the task.
 ///
-/// This is the "cancel all subtasks" action.
-/// The `task_type` query parameter optionally locks the operation to a specific
-/// type (e.g. `download`, `color_extract`).
+/// This is the "cancel all subtasks" action. Only deletes children with
+/// status `Pending` — running or completed subtasks are left untouched.
+/// Also cleans up their `task_dependencies` rows.
 ///
-/// Response:
-/// { "parent_job_id": "...", "cancelled": int, "child_ids": [...] }
+/// # Query Parameters
+///
+/// | Param       | Type   | Description                                   |
+/// |-------------|--------|-----------------------------------------------|
+/// | `task_type` | string | Optional: only delete children of this type (e.g. `download`) |
+///
+/// # Response (200)
+///
+/// ```json
+/// {
+///   "parent_job_id": "01HZ...",
+///   "cancelled": 8,
+///   "child_ids": ["01HZ...", "01HZ...", ...]
+/// }
+/// ```
 pub async fn interrupt_subtasks(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
