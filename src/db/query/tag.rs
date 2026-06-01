@@ -26,6 +26,14 @@ pub async fn find_or_create(
         .one(db)
         .await?
     {
+        // Update translated_name if existing tag has None but new value is Some
+        if existing.translated_name.is_none() {
+            if let Some(new_translated) = translated_name {
+                let mut active: tag::ActiveModel = existing.into();
+                active.translated_name = Set(Some(new_translated.to_string()));
+                return active.update(db).await;
+            }
+        }
         return Ok(existing);
     }
     let model = tag::ActiveModel {
