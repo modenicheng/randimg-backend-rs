@@ -9,6 +9,9 @@ pub struct CrawlJob {
     pub target_start_date: Option<String>,
     pub target_end_date: Option<String>,
     pub target_search_prompt: Option<String>,
+    /// Parent task ID for hierarchy tracking.
+    #[serde(default)]
+    pub parent_job_id: Option<String>,
 }
 
 /// Download a single image from Pixiv to local disk.
@@ -17,6 +20,9 @@ pub struct DownloadJob {
     pub image_id: i32,
     pub source_image_url: String,
     pub image_path: String,
+    /// Parent task ID for hierarchy tracking.
+    #[serde(default)]
+    pub parent_job_id: Option<String>,
 }
 
 /// Extract color palette from a downloaded image.
@@ -24,6 +30,9 @@ pub struct DownloadJob {
 pub struct ColorExtractJob {
     pub image_id: i32,
     pub image_path: String,
+    /// Parent task ID for hierarchy tracking.
+    #[serde(default)]
+    pub parent_job_id: Option<String>,
 }
 
 /// Upload a downloaded image to DogeCloud OSS.
@@ -31,6 +40,9 @@ pub struct ColorExtractJob {
 pub struct UploadJob {
     pub image_id: i32,
     pub image_path: String,
+    /// Parent task ID for hierarchy tracking.
+    #[serde(default)]
+    pub parent_job_id: Option<String>,
 }
 
 /// Check image accessibility (solid-color detection stub).
@@ -38,6 +50,9 @@ pub struct UploadJob {
 pub struct AccessibilityCheckJob {
     pub image_id: i32,
     pub image_path: String,
+    /// Parent task ID for hierarchy tracking.
+    #[serde(default)]
+    pub parent_job_id: Option<String>,
 }
 
 /// Discover related illustrations via Pixiv related-illust API.
@@ -47,10 +62,16 @@ pub struct DiscoverJob {
     pub max_hops: Option<u32>,
     pub seed_limit: Option<u64>,
     pub seed_method: Option<String>,
+    /// Parent task ID for hierarchy tracking.
+    #[serde(default)]
+    pub parent_job_id: Option<String>,
 }
 
 /// Refresh a Pixiv credential's OAuth token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshPixivTokenJob {
     pub credential_id: i32,
+    /// Parent task ID for hierarchy tracking.
+    #[serde(default)]
+    pub parent_job_id: Option<String>,
 }

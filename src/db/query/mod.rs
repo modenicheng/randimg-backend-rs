@@ -5,3 +5,4 @@ pub mod crawler;
 pub mod image;
 pub mod pixiv_credential;
 pub mod tag;
+pub mod task_dependency;
