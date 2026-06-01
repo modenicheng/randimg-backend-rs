@@ -10,6 +10,7 @@ mod m20260531_000004_rename_accessible;
 mod m20260531_000005_add_deleted_at;
 mod m20260531_000006_create_pixiv_credentials;
 mod m20260601_000001_create_task_hierarchy;
+mod m20260601_000002_fix_task_hierarchy_fk;
 
 pub struct Migrator;
 
@@ -24,6 +25,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260531_000005_add_deleted_at::Migration),
             Box::new(m20260531_000006_create_pixiv_credentials::Migration),
             Box::new(m20260601_000001_create_task_hierarchy::Migration),
+            Box::new(m20260601_000002_fix_task_hierarchy_fk::Migration),
         ]
     }
 }

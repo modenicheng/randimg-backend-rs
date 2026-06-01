@@ -6,19 +6,17 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Create task_dependencies table for tracking parent-child relationships.
-        //
-        // NOTE: Foreign keys to Apalis job storage are intentionally omitted.
-        // The Apalis SQLite backend stores jobs in a table named `Jobs`, but
-        // sea_orm_migration's `DeriveIden` emits `apalis_jobs` (snake_case of
-        // PascalCase enum variant). The mismatch causes FK validation errors
-        // at runtime (`no such table: main.apalis_jobs`). Since we never JOIN
-        // task_dependencies with the Apalis jobs table, the FK is unnecessary.
+        // Drop the broken table (created with FK to non-existent apalis_jobs)
+        // and recreate it without foreign keys.  Data loss is acceptable — the
+        // table has 0 rows because every INSERT has been failing at runtime.
+        manager
+            .drop_table(Table::drop().table(TaskDependencies::Table).to_owned())
+            .await?;
+
         manager
             .create_table(
                 Table::create()
                     .table(TaskDependencies::Table)
-                    .if_not_exists()
                     .col(
                         ColumnDef::new(TaskDependencies::Id)
                             .integer()
@@ -45,11 +43,11 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Create indexes for efficient queries
+        // Re-create indexes
         manager
             .create_index(
                 Index::create()
-                    .name("idx_task_dependencies_parent_job_id")
+                    .name("idx_task_dependencies_parent_job_id_v2")
                     .table(TaskDependencies::Table)
                     .col(TaskDependencies::ParentJobId)
                     .to_owned(),
@@ -59,18 +57,17 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
-                    .name("idx_task_dependencies_child_job_id")
+                    .name("idx_task_dependencies_child_job_id_v2")
                     .table(TaskDependencies::Table)
                     .col(TaskDependencies::ChildJobId)
                     .to_owned(),
             )
             .await?;
 
-        // Unique constraint: each (parent, child) pair should be unique
         manager
             .create_index(
                 Index::create()
-                    .name("idx_task_dependencies_parent_child_unique")
+                    .name("idx_task_dependencies_pair_v2")
                     .table(TaskDependencies::Table)
                     .col(TaskDependencies::ParentJobId)
                     .col(TaskDependencies::ChildJobId)
@@ -82,10 +79,7 @@ impl MigrationTrait for Migration {
         Ok(())
     }
 
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_table(Table::drop().table(TaskDependencies::Table).to_owned())
-            .await?;
+    async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
         Ok(())
     }
 }

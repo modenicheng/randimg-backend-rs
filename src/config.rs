@@ -56,6 +56,11 @@ pub struct AppConfig {
     pub log_json: bool,
     pub max_discover_hops: u32,
     pub discover_seed_limit: u64,
+    // Retry backoff
+    pub retry_max_retries: usize,
+    pub retry_backoff_min_ms: u64,
+    pub retry_backoff_max_secs: u64,
+    pub retry_backoff_jitter: f64,
     // DogeCloud OSS
     pub dogecloud_access_key: String,
     pub dogecloud_secret_key: String,
@@ -113,6 +118,23 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5),
+            // Retry backoff
+            retry_max_retries: env::var("RETRY_MAX_RETRIES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3),
+            retry_backoff_min_ms: env::var("RETRY_BACKOFF_MIN_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000),
+            retry_backoff_max_secs: env::var("RETRY_BACKOFF_MAX_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60),
+            retry_backoff_jitter: env::var("RETRY_BACKOFF_JITTER")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.5),
             // DogeCloud OSS
             dogecloud_access_key: env::var("DOGECLOUD_ACCESS_KEY").unwrap_or_default(),
             dogecloud_secret_key: env::var("DOGECLOUD_SECRET_KEY").unwrap_or_default(),

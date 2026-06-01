@@ -144,6 +144,7 @@ async fn crawl_ranking(
                         source_image_url: dl.source_image_url,
                         image_path: dl.image_path,
                         parent_job_id: Some(parent_id.to_string()),
+                        root_job_id: Some(parent_id.to_string()),
                     })
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
@@ -196,6 +197,7 @@ async fn crawl_user(
                         source_image_url: dl.source_image_url,
                         image_path: dl.image_path,
                         parent_job_id: Some(parent_id.to_string()),
+                        root_job_id: Some(parent_id.to_string()),
                     })
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
@@ -248,6 +250,7 @@ async fn crawl_bookmarks(
                         source_image_url: dl.source_image_url,
                         image_path: dl.image_path,
                         parent_job_id: Some(parent_id.to_string()),
+                        root_job_id: Some(parent_id.to_string()),
                     })
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
@@ -440,6 +443,7 @@ pub async fn handle_download(
     job: DownloadJob,
     task_id: TaskId<Ulid>,
     state: Data<Arc<AppState>>,
+    storage: Data<JobStorage>,
 ) -> Result<(), BoxDynError> {
     let current_id = task_id.to_string();
     record_hierarchy(&state.db, &current_id, job.parent_job_id.as_deref()).await;
@@ -474,6 +478,43 @@ pub async fn handle_download(
         .map_err(|e| format!("Failed to write file: {}", e))?;
 
     tracing::info!("Downloaded image {} to {}", job.image_id, file_path);
+
+    // Spawn downstream pipeline tasks as children of the root crawl job.
+    let upstream_id = job.root_job_id.as_deref().unwrap_or(&current_id);
+
+    if let Err(e) = storage
+        .push_color_extract(ColorExtractJob {
+            image_id: job.image_id,
+            image_path: job.image_path.clone(),
+            parent_job_id: Some(upstream_id.to_string()),
+        })
+        .await
+    {
+        tracing::error!(image_id = job.image_id, "Failed to submit color_extract task: {}", e);
+    }
+
+    if let Err(e) = storage
+        .push_upload(UploadJob {
+            image_id: job.image_id,
+            image_path: job.image_path.clone(),
+            parent_job_id: Some(upstream_id.to_string()),
+        })
+        .await
+    {
+        tracing::error!(image_id = job.image_id, "Failed to submit upload task: {}", e);
+    }
+
+    if let Err(e) = storage
+        .push_accessibility_check(AccessibilityCheckJob {
+            image_id: job.image_id,
+            image_path: job.image_path,
+            parent_job_id: Some(upstream_id.to_string()),
+        })
+        .await
+    {
+        tracing::error!(image_id = job.image_id, "Failed to submit accessibility_check task: {}", e);
+    }
+
     Ok(())
 }
 
@@ -677,6 +718,7 @@ pub async fn handle_discover(
                         source_image_url: dl.source_image_url,
                         image_path: dl.image_path,
                         parent_job_id: Some(current_id.clone()),
+                        root_job_id: Some(current_id.clone()),
                     })
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;

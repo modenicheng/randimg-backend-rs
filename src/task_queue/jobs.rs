@@ -23,6 +23,12 @@ pub struct DownloadJob {
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
+    /// The ID of the root crawl job that originated this pipeline.
+    /// Downstream tasks (color_extract, upload, accessibility_check)
+    /// use this as their `parent_job_id` so the full pipeline is
+    /// represented as direct children of the crawl task.
+    #[serde(default)]
+    pub root_job_id: Option<String>,
 }
 
 /// Extract color palette from a downloaded image.

@@ -28,6 +28,7 @@ fn test_download_job_roundtrip() {
         source_image_url: "https://example.com/image.jpg".into(),
         image_path: "/data/images/42.jpg".into(),
         parent_job_id: None,
+        root_job_id: None,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: DownloadJob = serde_json::from_str(&json).unwrap();
@@ -138,6 +139,7 @@ fn test_job_structs_are_clone() {
         source_image_url: "url".into(),
         image_path: "path".into(),
         parent_job_id: None,
+        root_job_id: None,
     };
     let cloned = job.clone();
     assert_eq!(cloned.image_id, 1);
