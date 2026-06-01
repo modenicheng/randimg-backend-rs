@@ -9,8 +9,11 @@ Randimg is a Rust backend that crawls images from Pixiv, extracts color palettes
 ## Build & Run
 
 ```bash
-# Build
+# Build (default SQLite)
 cargo build
+
+# Build with PostgreSQL
+cargo build --no-default-features --features postgres
 
 # Run (requires .env with SECRET_KEY set to non-default value)
 cargo run
@@ -38,7 +41,9 @@ cargo run --example color_extract_demo -- path/to/image.jpg
 
 ### Task queue (`src/task_queue/`)
 
-Uses the Apalis library with `apalis-sqlite` (dev) / `apalis-postgres` (prod) for job storage. Seven workers, one per job type: `crawl`, `download`, `color_extract`, `upload`, `accessibility_check`, `discover`, `refresh_pixiv_token`. Jobs are defined as structs in `src/task_queue/jobs.rs`, handlers live in `src/task_queue/handlers.rs`, and workers are spawned via the `spawn_worker!` macro in `src/main.rs`. Failed tasks retry up to 3 times (Apalis built-in). The backend abstraction (`Pool`, `JobStorage`, `init()`) lives in `src/db_backend.rs`.
+Uses the Apalis library with `apalis-sqlite` (dev) / `apalis-postgres` (prod) for job storage. Seven workers, one per job type: `crawl`, `download`, `color_extract`, `upload`, `accessibility_check`, `discover`, `refresh_pixiv_token`. Jobs are defined as structs in `src/task_queue/jobs.rs`, handlers live in `src/task_queue/handlers.rs`, and workers are spawned via the `spawn_workers()` function in `src/lib.rs` (uses a local `spawn_worker!` macro). Failed tasks retry up to 3 times (Apalis built-in). The backend abstraction (`Pool`, `JobStorage`, `init()`) lives in `src/db_backend.rs`.
+
+**Job pipeline**: Crawl → Download → (ColorExtract + Upload + AccessibilityCheck in parallel) → Discover. Parent-child relationships are tracked in `task_dependencies` table. `DownloadJob` has a `root_job_id` so downstream tasks appear as direct children of the crawl task. `db_backend.rs` provides `push_*_with_parent()` methods that pre-generate ULIDs to record hierarchy before jobs execute.
 
 ### Color pipeline (`src/color/`)
 
@@ -54,7 +59,7 @@ All settings come from environment variables (loaded via `dotenvy`). The app pan
 
 ## Key Files
 
-- **`src/main.rs`** — Entry point: config, tracing setup, DB init, task runner startup, Axum router definition, graceful shutdown.
+- **`src/main.rs`** — Entry point: config, tracing setup, DB init, task runner startup, Axum router definition (inline via `.merge()` on each handler's `routes()` function), graceful shutdown (SIGINT/SIGTERM).
 - **`src/lib.rs`** — Crate root: re-exports all modules, defines `AppState` (shared DB connection + config).
 - **`src/error.rs`** — `AppError` enum with `IntoResponse`; `From<DbErr>` for automatic conversion.
 - **`src/db_backend.rs`** — Database backend abstraction: `Pool` type, `JobStorage` (holds typed job storages), `init()` to connect and set up Apalis.
@@ -67,7 +72,7 @@ All settings come from environment variables (loaded via `dotenvy`). The app pan
 
 ## Database & Migrations
 
-Migrations live in `migration/` as a path dependency and run automatically on startup. SeaORM dual-database support is gated by feature flags (`sqlite` / `postgres`). New migrations go in `migration/src/` with the `m{YYYYMMDD}_{seq}_{name}.rs` naming convention.
+Migrations live in `migration/` as a path dependency and run automatically on startup. SeaORM dual-database support is gated by feature flags (`sqlite` / `postgres`) — these are mutually exclusive. The `apalis_job` entity is feature-gated for type differences between SQLite (`i64` timestamps, `String` metadata) and PostgreSQL (`DateTimeWithTimeZone`, `JsonValue`). New migrations go in `migration/src/` with the `m{YYYYMMDD}_{seq}_{name}.rs` naming convention.
 
 ## Environment Variables
 
@@ -77,11 +82,13 @@ See `.env.example` for the full list. Critical ones:
 - `PIXIV_REFRESH_TOKEN` — Required for Pixiv crawling
 - `CDN_BASE_URL` — Prefix for image URLs in API responses
 - `IMAGE_DIR` — Local filesystem path for downloaded images
+- `SERVER_ADDR` — Supports TCP (`0.0.0.0:8000`) and Unix socket (`unix:///run/randimg.sock`)
 
 ## Conventions
 
 - Error handling: return `AppError` variants, not raw `StatusCode`. Internal errors are logged at ERROR level before returning a sanitized message.
+- Each handler module exports a `routes()` function returning an `Axum Router`. Routes are merged in `main.rs`.
 - Batch-fetch associations to avoid N+1 queries (see `list_images` in `db/query/image.rs`).
-- New task types: define a job struct in `task_queue/jobs.rs`, add a handler in `task_queue/handlers.rs`, add a storage field in `db_backend.rs::JobStorage`, register a worker in `main.rs::spawn_workers()`.
-- Routes are registered in `main.rs` inside `build_router()`.
+- New task types: define a job struct in `task_queue/jobs.rs`, add a handler in `task_queue/handlers.rs`, add a storage field in `db_backend.rs::JobStorage`, register a worker in `lib.rs::spawn_workers()`.
+- Routes are registered in `main.rs` by adding a `.merge(module::routes())` call to the router.
 - Use `tracing` macros (`info!`, `error!`, `debug!`) — not `println!`.

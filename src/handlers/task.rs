@@ -29,6 +29,10 @@ pub struct CleanTasksRequest {
     /// Optional: only clean tasks of this job type.
     #[serde(default)]
     pub task_type: Option<String>,
+    /// Optional: filter crawl tasks by crawl_type (0=ranking, 1=user, 2=bookmarks).
+    /// Only effective when task_type is "crawl".
+    #[serde(default)]
+    pub crawl_type: Option<i32>,
 }
 
 /// POST /tasks/clean — Bulk-delete tasks by status flags.
@@ -135,20 +139,36 @@ async fn clean_tasks(
         tracing::info!("Aborted {} Apalis workers for cleanup", handles.len());
     }
 
-    // Delete tasks
-    let deleted = query::apalis_job::delete_by_statuses(
-        &state.db,
-        &statuses,
-        body.task_type.as_deref(),
-    )
-    .await?;
+    // Delete tasks — capture result without `?` so we can re-spawn workers even on error
+    let delete_result = if let Some(ct) = body.crawl_type {
+        // crawl_type filter: find matching crawl task IDs first, then delete them
+        let ids = query::apalis_job::find_crawl_ids_by_type(&state.db, ct)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        if ids.is_empty() {
+            Ok(0u64)
+        } else {
+            query::apalis_job::delete_by_statuses_and_ids(&state.db, &statuses, &ids)
+                .await
+        }
+    } else {
+        query::apalis_job::delete_by_statuses(
+            &state.db,
+            &statuses,
+            body.task_type.as_deref(),
+        )
+        .await
+    };
 
-    // Re-spawn workers if they were aborted
+    // Re-spawn workers if they were aborted — MUST happen regardless of delete outcome
     if should_abort_workers {
         let new_handles = crate::spawn_workers(state.clone(), &state.apalis_pool).await;
         *state.worker_handles.lock().await = new_handles;
         tracing::info!("Re-spawned Apalis workers after cleanup");
     }
+
+    // Propagate delete error AFTER workers have been re-spawned
+    let deleted = delete_result?;
 
     Ok(Json(serde_json::json!({
         "deleted": deleted,
@@ -205,7 +225,7 @@ fn unmap_status(status: &str) -> Vec<&'static str> {
         "pending" | "queued" => vec![apalis_job::STATUS_PENDING, apalis_job::STATUS_QUEUED],
         "running" => vec![apalis_job::STATUS_RUNNING],
         "completed" => vec![apalis_job::STATUS_DONE],
-        "failed" => vec![apalis_job::STATUS_FAILED, apalis_job::STATUS_KILLED],
+        "failed" => vec![apalis_job::STATUS_FAILED],
         "killed" => vec![apalis_job::STATUS_KILLED],
         _ => vec![apalis_job::STATUS_PENDING, apalis_job::STATUS_QUEUED],
     }
@@ -427,6 +447,7 @@ pub async fn delete_pending_tasks(
 #[derive(Deserialize)]
 pub struct RootsOrSubtasksQuery {
     pub task_type: Option<String>,
+    pub crawl_type: Option<i32>,
     pub status: Option<String>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
@@ -473,6 +494,7 @@ pub async fn list_roots(
         query::task_tree::list_roots_derived(
             db,
             q.task_type.as_deref(),
+            q.crawl_type,
             q.status.as_deref(),
             limit,
             offset,
@@ -480,6 +502,7 @@ pub async fn list_roots(
         query::task_tree::count_roots_derived(
             db,
             q.task_type.as_deref(),
+            q.crawl_type,
             q.status.as_deref(),
         ),
     )
@@ -560,6 +583,7 @@ pub async fn get_task_tree(
         &task_id,
         None, // task_type filter  – export as-is
         None, // status filter
+        20,   // max recursion depth to guard against circular references
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -605,7 +629,10 @@ pub async fn get_subtasks(
         other       => vec![other],
     });
 
-    let children = query::task_tree::list_subtasks(
+    let limit = q.limit.map(|l| l as u64);
+    let offset = q.offset.map(|o| o as u64);
+
+    let total = query::task_tree::count_subtasks(
         &state.db,
         &task_id,
         q.task_type.as_deref(),
@@ -614,15 +641,19 @@ pub async fn get_subtasks(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let total = children.len() as u64;
-    // Apply client-side limit/offset (subtask lists are typically small)
-    let limit = q.limit.unwrap_or(100) as usize;
-    let offset = q.offset.unwrap_or(0) as usize;
+    let children = query::task_tree::list_subtasks(
+        &state.db,
+        &task_id,
+        q.task_type.as_deref(),
+        mapped_status.as_deref(),
+        limit,
+        offset,
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let page: Vec<serde_json::Value> = children
         .into_iter()
-        .skip(offset)
-        .take(limit)
         .map(|j| tree_row_to_json(&j))
         .collect();
 

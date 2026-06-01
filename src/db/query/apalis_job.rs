@@ -47,16 +47,45 @@ pub async fn find_by_id(
     ApalisJob::find_by_id(id.to_string()).one(db).await
 }
 
-/// Delete a job by ID. Returns `true` if a row was deleted.
+/// Delete a job by ID, along with any `task_dependencies` rows that reference it
+/// (both as parent and as child). Returns `true` if the job row was deleted.
 pub async fn delete_by_id(
     db: &DatabaseConnection,
     id: &str,
 ) -> Result<bool, DbErr> {
-    let result = ApalisJob::delete_many()
-        .filter(apalis_job::Column::Id.eq(id))
-        .exec(db)
-        .await?;
-    Ok(result.rows_affected > 0)
+    use crate::db::entities::task_dependency::{Entity as TaskDependency, Column as DepCol};
+
+    let id_owned = id.to_string();
+    let result = db.transaction::<_, bool, DbErr>(|txn| {
+        Box::pin(async move {
+            // Delete task_dependency rows where this job is a child
+            TaskDependency::delete_many()
+                .filter(DepCol::ChildJobId.eq(&id_owned))
+                .exec(txn)
+                .await?;
+
+            // Delete task_dependency rows where this job is a parent
+            TaskDependency::delete_many()
+                .filter(DepCol::ParentJobId.eq(&id_owned))
+                .exec(txn)
+                .await?;
+
+            // Delete the job itself
+            let result = ApalisJob::delete_many()
+                .filter(apalis_job::Column::Id.eq(&id_owned))
+                .exec(txn)
+                .await?;
+
+            Ok(result.rows_affected > 0)
+        })
+    })
+    .await
+    .map_err(|e| match e {
+        TransactionError::Connection(e) => e,
+        TransactionError::Transaction(e) => e,
+    })?;
+
+    Ok(result)
 }
 
 /// Delete all pending jobs, optionally filtered by job type.
@@ -71,6 +100,105 @@ pub async fn delete_pending(
         task_type,
     )
     .await
+}
+
+/// Find IDs of crawl tasks whose payload has the given crawl_type.
+#[cfg(feature = "sqlite")]
+pub async fn find_crawl_ids_by_type(
+    db: &DatabaseConnection,
+    crawl_type: i32,
+) -> Result<Vec<String>, DbErr> {
+    let sql = "SELECT id FROM Jobs WHERE job_type = 'crawl' AND json_extract(job, '$.crawl_type') = ?";
+    let stmt = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        sql,
+        [crawl_type.into()],
+    );
+    let rows = db.query_all(stmt).await?;
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in &rows {
+        ids.push(row.try_get_by_index::<String>(0)?);
+    }
+    Ok(ids)
+}
+
+/// Find IDs of crawl tasks whose payload has the given crawl_type.
+#[cfg(feature = "postgres")]
+pub async fn find_crawl_ids_by_type(
+    db: &DatabaseConnection,
+    crawl_type: i32,
+) -> Result<Vec<String>, DbErr> {
+    let sql = "SELECT id FROM apalis.jobs WHERE job_type = 'crawl' AND (job::json->>'crawl_type')::int = $1";
+    let stmt = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        sql,
+        [crawl_type.into()],
+    );
+    let rows = db.query_all(stmt).await?;
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in &rows {
+        ids.push(row.try_get_by_index::<String>(0)?);
+    }
+    Ok(ids)
+}
+
+/// Bulk-delete jobs by statuses and a set of IDs.
+///
+/// Deletes only jobs that match both the status list AND the ID list.
+/// Also cleans up task_dependencies rows. Returns the number of jobs deleted.
+pub async fn delete_by_statuses_and_ids(
+    db: &DatabaseConnection,
+    statuses: &[&str],
+    ids: &[String],
+) -> Result<u64, DbErr> {
+    use crate::db::entities::task_dependency::{Entity as TaskDependency, Column as DepCol};
+
+    if statuses.is_empty() || ids.is_empty() {
+        return Ok(0);
+    }
+
+    // Find matching jobs
+    let to_delete: Vec<String> = ApalisJob::find()
+        .select_only()
+        .column(apalis_job::Column::Id)
+        .filter(apalis_job::Column::Status.is_in(statuses.iter().copied()))
+        .filter(apalis_job::Column::Id.is_in(ids.iter().map(|s| s.as_str())))
+        .into_tuple()
+        .all(db)
+        .await?;
+
+    if to_delete.is_empty() {
+        return Ok(0);
+    }
+
+    let ids_clone = to_delete.clone();
+    let result = db.transaction::<_, u64, DbErr>(|txn| {
+        Box::pin(async move {
+            TaskDependency::delete_many()
+                .filter(DepCol::ChildJobId.is_in(&ids_clone))
+                .exec(txn)
+                .await?;
+
+            TaskDependency::delete_many()
+                .filter(DepCol::ParentJobId.is_in(&ids_clone))
+                .exec(txn)
+                .await?;
+
+            let result = ApalisJob::delete_many()
+                .filter(apalis_job::Column::Id.is_in(&ids_clone))
+                .exec(txn)
+                .await?;
+
+            Ok(result.rows_affected)
+        })
+    })
+    .await
+    .map_err(|e| match e {
+        TransactionError::Connection(e) => e,
+        TransactionError::Transaction(e) => e,
+    })?;
+
+    Ok(result)
 }
 
 /// Bulk-delete jobs by statuses.
