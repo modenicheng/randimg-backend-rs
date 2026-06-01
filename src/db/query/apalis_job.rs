@@ -5,7 +5,7 @@ use sea_orm::*;
 pub async fn list(
     db: &DatabaseConnection,
     task_type: Option<&str>,
-    status: Option<&str>,
+    status: Option<Vec<&str>>,
     limit: u64,
     offset: u64,
 ) -> Result<Vec<apalis_job::Model>, DbErr> {
@@ -13,8 +13,10 @@ pub async fn list(
     if let Some(tt) = task_type {
         query = query.filter(apalis_job::Column::JobType.eq(tt));
     }
-    if let Some(st) = status {
-        query = query.filter(apalis_job::Column::Status.eq(st));
+    if let Some(ref statuses) = status {
+        if !statuses.is_empty() {
+            query = query.filter(apalis_job::Column::Status.is_in(statuses.iter().copied()));
+        }
     }
     query.limit(limit).offset(offset).all(db).await
 }
@@ -23,14 +25,16 @@ pub async fn list(
 pub async fn count(
     db: &DatabaseConnection,
     task_type: Option<&str>,
-    status: Option<&str>,
+    status: Option<Vec<&str>>,
 ) -> Result<u64, DbErr> {
     let mut query = ApalisJob::find();
     if let Some(tt) = task_type {
         query = query.filter(apalis_job::Column::JobType.eq(tt));
     }
-    if let Some(st) = status {
-        query = query.filter(apalis_job::Column::Status.eq(st));
+    if let Some(ref statuses) = status {
+        if !statuses.is_empty() {
+            query = query.filter(apalis_job::Column::Status.is_in(statuses.iter().copied()));
+        }
     }
     query.count(db).await
 }

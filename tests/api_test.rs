@@ -24,7 +24,7 @@ async fn test_login_returns_token() {
     let client = reqwest::Client::new();
     let resp = client
         .post("http://localhost:8000/token")
-        .form(&[("username", "test"), ("password", "test")])
+        .json(&serde_json::json!({"username": "test", "password": "test"}))
         .send()
         .await;
 

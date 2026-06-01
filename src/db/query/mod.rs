@@ -6,3 +6,4 @@ pub mod image;
 pub mod pixiv_credential;
 pub mod tag;
 pub mod task_dependency;
+pub mod task_tree;

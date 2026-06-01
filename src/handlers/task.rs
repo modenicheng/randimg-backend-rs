@@ -16,11 +16,19 @@ use crate::error::AppError;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        // Static segments MUST precede dynamic ones so Axum matches them first.
         .route("/tasks", get(list_tasks))
-        // NOTE: `/tasks/pending` must be registered before `/tasks/{task_id}` —
-        // Axum prioritizes static segments over dynamic params.
+        .route("/tasks/roots", get(list_roots))
         .route("/tasks/pending", delete(delete_pending_tasks))
-        .route("/tasks/{task_id}", get(get_task).delete(delete_task))
+        .route(
+            "/tasks/{task_id}",
+            get(get_task).delete(delete_task),
+        )
+        .route("/tasks/{task_id}/tree", get(get_task_tree))
+        .route(
+            "/tasks/{task_id}/subtasks",
+            get(get_subtasks).delete(interrupt_subtasks),
+        )
 }
 
 #[derive(Deserialize)]
@@ -42,20 +50,20 @@ fn map_status(status: &str) -> &'static str {
         apalis_job::STATUS_RUNNING => "running",
         apalis_job::STATUS_DONE => "completed",
         apalis_job::STATUS_FAILED => "failed",
-        apalis_job::STATUS_KILLED => "killed",
+        apalis_job::STATUS_KILLED => "failed",
         _ => "unknown",
     }
 }
 
-/// Map API status filter to Apalis status string.
-fn unmap_status(status: &str) -> &'static str {
+/// Map API status filter to Apalis status string(s).
+fn unmap_status(status: &str) -> Vec<&'static str> {
     match status {
-        "pending" => apalis_job::STATUS_PENDING,
-        "running" => apalis_job::STATUS_RUNNING,
-        "completed" => apalis_job::STATUS_DONE,
-        "failed" => apalis_job::STATUS_FAILED,
-        "killed" => apalis_job::STATUS_KILLED,
-        _ => apalis_job::STATUS_PENDING,
+        "pending" => vec![apalis_job::STATUS_PENDING],
+        "running" => vec![apalis_job::STATUS_RUNNING],
+        "completed" => vec![apalis_job::STATUS_DONE],
+        "failed" => vec![apalis_job::STATUS_FAILED, apalis_job::STATUS_KILLED],
+        "killed" => vec![apalis_job::STATUS_KILLED],
+        _ => vec![apalis_job::STATUS_PENDING],
     }
 }
 
@@ -132,7 +140,7 @@ pub async fn list_tasks(
     let mapped_status = q.status.as_deref().map(unmap_status);
 
     let (rows, total) = tokio::try_join!(
-        query::apalis_job::list(db, q.task_type.as_deref(), mapped_status, limit, offset),
+        query::apalis_job::list(db, q.task_type.as_deref(), mapped_status.clone(), limit, offset),
         query::apalis_job::count(db, q.task_type.as_deref(), mapped_status),
     )
     .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -196,5 +204,167 @@ pub async fn delete_pending_tasks(
     Ok(Json(serde_json::json!({
         "message": "Pending tasks deleted",
         "deleted": deleted,
+    })))
+}
+
+// =========================================================================
+// Tree endpoints — root tasks, subtasks, interrupt
+// =========================================================================
+
+#[derive(Deserialize)]
+pub struct RootsOrSubtasksQuery {
+    pub task_type: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+}
+
+fn tree_row_to_json(t: &apalis_job::Model) -> serde_json::Value {
+    row_to_json(t)
+}
+
+// ── GET /tasks/roots ────────────────────────────────────────────────────────
+
+/// GET /tasks/roots — Root tasks (jobs without a parent), with filters and pagination.
+///
+/// Response:
+/// { "tasks": [...], "total": int }
+pub async fn list_roots(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Query(q): Query<RootsOrSubtasksQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let limit = q.limit.unwrap_or(50).min(200);
+    let offset = q.offset.unwrap_or(0);
+
+    // Resolve the status filter: user sends lowercase, apalis stores "Pending" etc.
+    let mapped_status = q.status.as_deref().map(|s| match s {
+        "pending"   => apalis_job::STATUS_PENDING,
+        "running"   => apalis_job::STATUS_RUNNING,
+        "completed" => apalis_job::STATUS_DONE,
+        "failed"    => apalis_job::STATUS_FAILED,
+        other       => other, // pass through unknown as-is
+    });
+
+    let db = &state.db;
+
+    let (rows, total) = tokio::try_join!(
+        query::task_tree::list_roots(db, q.task_type.as_deref(), mapped_status, limit, offset),
+        query::task_tree::count_roots(db, q.task_type.as_deref(), mapped_status),
+    )
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let items: Vec<serde_json::Value> = rows.iter().map(tree_row_to_json).collect();
+
+    Ok(Json(serde_json::json!({
+        "tasks": items,
+        "total": total,
+    })))
+}
+
+// ── GET /tasks/{id}/tree ────────────────────────────────────────────────────
+
+/// GET /tasks/{id}/tree — Nested tree rooted at the given task ID.
+///
+/// Returns the full recursive hierarchy, with job details at each node.
+/// Response: { "root_job_id": "...", "children": [ { job: {...}, children: [...] }, ... ] }
+pub async fn get_task_tree(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Path(task_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let tree = query::task_tree::list_children(
+        &state.db,
+        &task_id,
+        None, // task_type filter  – export as-is
+        None, // status filter
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "root_job_id": task_id,
+        "children": tree,
+    })))
+}
+
+// ── GET /tasks/{id}/subtasks ────────────────────────────────────────────────
+
+/// GET /tasks/{id}/subtasks — Flat list of direct children of the given task.
+///
+/// Response:
+/// { "parent_job_id": "...", "subtasks": [...job objects...], "total": int }
+pub async fn get_subtasks(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Path(task_id): Path<String>,
+    Query(q): Query<RootsOrSubtasksQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mapped_status = q.status.as_deref().map(|s| match s {
+        "pending"   => apalis_job::STATUS_PENDING,
+        "running"   => apalis_job::STATUS_RUNNING,
+        "completed" => apalis_job::STATUS_DONE,
+        "failed"    => apalis_job::STATUS_FAILED,
+        other       => other,
+    });
+
+    let children = query::task_tree::list_subtasks(
+        &state.db,
+        &task_id,
+        q.task_type.as_deref(),
+        mapped_status,
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let total = children.len() as u64;
+    // Apply client-side limit/offset (subtask lists are typically small)
+    let limit = q.limit.unwrap_or(100) as usize;
+    let offset = q.offset.unwrap_or(0) as usize;
+
+    let page: Vec<serde_json::Value> = children
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|j| tree_row_to_json(&j))
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "parent_job_id": task_id,
+        "subtasks": page,
+        "total": total,
+    })))
+}
+
+// ── DELETE /tasks/{id}/subtasks ──────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct InterruptSubtasksQuery {
+    pub task_type: Option<String>,
+}
+
+/// DELETE /tasks/{id}/subtasks — Delete all **pending** children of the task.
+///
+/// This is the "cancel all subtasks" action.
+/// The `task_type` query parameter optionally locks the operation to a specific
+/// type (e.g. `download`, `color_extract`).
+///
+/// Response:
+/// { "parent_job_id": "...", "cancelled": int, "child_ids": [...] }
+pub async fn interrupt_subtasks(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Path(task_id): Path<String>,
+    Query(q): Query<InterruptSubtasksQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (cancelled_ids, _) =
+        query::task_tree::interrupt_subtasks(&state.db, &task_id, q.task_type.as_deref())
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "parent_job_id": task_id,
+        "cancelled": cancelled_ids.len(),
+        "child_ids": cancelled_ids,
     })))
 }
