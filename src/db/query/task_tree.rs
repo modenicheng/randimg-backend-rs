@@ -52,12 +52,42 @@ pub struct RootWithDerivedStatus {
     pub has_active: bool,
     pub has_failed: bool,
     pub has_completed: bool,
+    /// `true` when at least one descendant has reached the terminal `Killed`
+    /// state (retries exhausted or `AbortError`). Used to distinguish
+    /// "transient failure, may still recover" from "definitively dead".
+    pub has_killed_terminal: bool,
 }
 
-/// Map the three descendant-status flags to a user-facing derived status string.
-pub fn derived_status_from_flags(has_active: bool, has_failed: bool, has_completed: bool) -> &'static str {
+/// Map the descendant-status flags to a user-facing derived status string.
+///
+/// Resolution order:
+/// 1. **Active wins**: any descendant still `Pending`/`Queued`/`Running` ⇒ `running`.
+/// 2. **Terminal failure, all retries exhausted** (`has_failed && has_completed == false
+///    && has_killed_terminal == has_failed`): every failed descendant is in the
+///    terminal `Killed` state — no recovery possible ⇒ `killed`.
+/// 3. **Mixed outcome** (some `Done`, some failed) ⇒ `partial_success`.
+/// 4. **Transient failure** (failed descendants still in the `Failed` state with
+///    retries remaining) ⇒ `failed`.
+/// 5. **All done** ⇒ `completed`.
+/// 6. **Empty subtree** ⇒ `pending` (the rollup is not consulted in this case by
+///    the caller, but we degrade safely here).
+///
+/// This rollup is only consulted after the root itself has reached `completed`
+/// (see `list_roots::effective`), with the exception of rule 2, which short-circuits
+/// the root-priority check because a fully-killed subtree means the root cannot
+/// produce a useful result either.
+pub fn derived_status_from_flags(
+    has_active: bool,
+    has_failed: bool,
+    has_completed: bool,
+    has_killed_terminal: bool,
+) -> &'static str {
     if has_active {
         "running"
+    } else if has_failed && !has_completed && has_killed_terminal == has_failed {
+        // Every failed descendant is terminal (Killed). The subtree is dead —
+        // surface as `killed` so the UI matches the Apalis terminal state.
+        "killed"
     } else if has_failed && has_completed {
         "partial_success"
     } else if has_failed {
@@ -463,21 +493,34 @@ pub async fn list_roots_derived(
     }
 
     match derived_status {
-        Some("running") => {
-            extra_filters.push_str(" AND COALESCE(rf.has_active, 0) = 1");
-        }
-        Some("partial_success") => {
+        // Priority: killed > failed > partial_success > running > completed > pending
+        Some("killed") => {
             extra_filters.push_str(
                 " AND COALESCE(rf.has_active, 0) = 0 \
                  AND COALESCE(rf.has_failed, 0) = 1 \
-                 AND COALESCE(rf.has_completed, 0) = 1",
+                 AND COALESCE(rf.has_completed, 0) = 0 \
+                 AND COALESCE(rf.has_killed_terminal, 0) = COALESCE(rf.has_failed, 0)",
             );
         }
         Some("failed") => {
             extra_filters.push_str(
                 " AND COALESCE(rf.has_active, 0) = 0 \
                  AND COALESCE(rf.has_failed, 0) = 1 \
-                 AND COALESCE(rf.has_completed, 0) = 0",
+                 AND COALESCE(rf.has_completed, 0) = 0 \
+                 AND (COALESCE(rf.has_killed_terminal, 0) < COALESCE(rf.has_failed, 0) \
+                      OR COALESCE(rf.has_completed, 0) = 1)",
+            );
+        }
+        Some("partial_success") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_failed, 0) = 1 \
+                 AND COALESCE(rf.has_completed, 0) = 1",
+            );
+        }
+        Some("running") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 1 \
+                 AND COALESCE(rf.has_failed, 0) = 0",
             );
         }
         Some("completed") => {
@@ -529,7 +572,8 @@ pub async fn list_roots_derived(
                         d.root_id,
                         MAX(CASE WHEN j2.status IN ('Pending','Queued','Running') THEN 1 ELSE 0 END) AS has_active,
                         MAX(CASE WHEN j2.status IN ('Failed','Killed')              THEN 1 ELSE 0 END) AS has_failed,
-                        MAX(CASE WHEN j2.status = 'Done'                            THEN 1 ELSE 0 END) AS has_completed
+                        MAX(CASE WHEN j2.status = 'Done'                            THEN 1 ELSE 0 END) AS has_completed,
+                        MAX(CASE WHEN j2.status = 'Killed'                          THEN 1 ELSE 0 END) AS has_killed_terminal
                     FROM descendants d
                     JOIN Jobs j2 ON j2.id = d.descendant_id
                     GROUP BY d.root_id
@@ -539,7 +583,8 @@ pub async fn list_roots_derived(
                 r.run_at, r.done_at, r.last_result, r.priority, r.job,
                 COALESCE(rf.has_active, 0)    AS has_active,
                 COALESCE(rf.has_failed, 0)    AS has_failed,
-                COALESCE(rf.has_completed, 0) AS has_completed
+                COALESCE(rf.has_completed, 0) AS has_completed,
+                COALESCE(rf.has_killed_terminal, 0) AS has_killed_terminal
             FROM Jobs r
             LEFT JOIN root_flags rf ON rf.root_id = r.id
             WHERE r.id NOT IN (SELECT child_job_id FROM task_dependencies)
@@ -581,7 +626,8 @@ pub async fn list_roots_derived(
                         d.root_id,
                         BOOL_OR(j2.status IN ('Pending','Queued','Running')) AS has_active,
                         BOOL_OR(j2.status IN ('Failed','Killed'))            AS has_failed,
-                        BOOL_OR(j2.status = 'Done')                          AS has_completed
+                        BOOL_OR(j2.status = 'Done')                          AS has_completed,
+                        BOOL_OR(j2.status = 'Killed')                        AS has_killed_terminal
                     FROM descendants d
                     JOIN apalis.jobs j2 ON j2.id = d.descendant_id
                     GROUP BY d.root_id
@@ -591,7 +637,8 @@ pub async fn list_roots_derived(
                 r.run_at, r.done_at, r.last_result, r.priority, r.job,
                 COALESCE(rf.has_active, false)    AS has_active,
                 COALESCE(rf.has_failed, false)    AS has_failed,
-                COALESCE(rf.has_completed, false) AS has_completed
+                COALESCE(rf.has_completed, false) AS has_completed,
+                COALESCE(rf.has_killed_terminal, false) AS has_killed_terminal
             FROM apalis.jobs r
             LEFT JOIN root_flags rf ON rf.root_id = r.id
             WHERE r.id NOT IN (SELECT child_job_id FROM task_dependencies)
@@ -621,6 +668,7 @@ pub async fn list_roots_derived(
             has_active: row.try_get_by_index::<i32>(10)? != 0,
             has_failed: row.try_get_by_index::<i32>(11)? != 0,
             has_completed: row.try_get_by_index::<i32>(12)? != 0,
+            has_killed_terminal: row.try_get_by_index::<i32>(13)? != 0,
         });
     }
 
@@ -653,21 +701,34 @@ pub async fn count_roots_derived(
     }
 
     match derived_status {
-        Some("running") => {
-            extra_filters.push_str(" AND COALESCE(rf.has_active, 0) = 1");
-        }
-        Some("partial_success") => {
+        // Priority: killed > failed > partial_success > running > completed > pending
+        Some("killed") => {
             extra_filters.push_str(
                 " AND COALESCE(rf.has_active, 0) = 0 \
                  AND COALESCE(rf.has_failed, 0) = 1 \
-                 AND COALESCE(rf.has_completed, 0) = 1",
+                 AND COALESCE(rf.has_completed, 0) = 0 \
+                 AND COALESCE(rf.has_killed_terminal, 0) = COALESCE(rf.has_failed, 0)",
             );
         }
         Some("failed") => {
             extra_filters.push_str(
                 " AND COALESCE(rf.has_active, 0) = 0 \
                  AND COALESCE(rf.has_failed, 0) = 1 \
-                 AND COALESCE(rf.has_completed, 0) = 0",
+                 AND COALESCE(rf.has_completed, 0) = 0 \
+                 AND (COALESCE(rf.has_killed_terminal, 0) < COALESCE(rf.has_failed, 0) \
+                      OR COALESCE(rf.has_completed, 0) = 1)",
+            );
+        }
+        Some("partial_success") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_failed, 0) = 1 \
+                 AND COALESCE(rf.has_completed, 0) = 1",
+            );
+        }
+        Some("running") => {
+            extra_filters.push_str(
+                " AND COALESCE(rf.has_active, 0) = 1 \
+                 AND COALESCE(rf.has_failed, 0) = 0",
             );
         }
         Some("completed") => {
@@ -719,7 +780,8 @@ pub async fn count_roots_derived(
                         d.root_id,
                         MAX(CASE WHEN j2.status IN ('Pending','Queued','Running') THEN 1 ELSE 0 END) AS has_active,
                         MAX(CASE WHEN j2.status IN ('Failed','Killed')              THEN 1 ELSE 0 END) AS has_failed,
-                        MAX(CASE WHEN j2.status = 'Done'                            THEN 1 ELSE 0 END) AS has_completed
+                        MAX(CASE WHEN j2.status = 'Done'                            THEN 1 ELSE 0 END) AS has_completed,
+                        MAX(CASE WHEN j2.status = 'Killed'                          THEN 1 ELSE 0 END) AS has_killed_terminal
                     FROM descendants d
                     JOIN Jobs j2 ON j2.id = d.descendant_id
                     GROUP BY d.root_id
@@ -764,7 +826,8 @@ pub async fn count_roots_derived(
                         d.root_id,
                         BOOL_OR(j2.status IN ('Pending','Queued','Running')) AS has_active,
                         BOOL_OR(j2.status IN ('Failed','Killed'))            AS has_failed,
-                        BOOL_OR(j2.status = 'Done')                          AS has_completed
+                        BOOL_OR(j2.status = 'Done')                          AS has_completed,
+                        BOOL_OR(j2.status = 'Killed')                        AS has_killed_terminal
                     FROM descendants d
                     JOIN apalis.jobs j2 ON j2.id = d.descendant_id
                     GROUP BY d.root_id

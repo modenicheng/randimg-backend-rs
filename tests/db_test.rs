@@ -850,3 +850,45 @@ async fn test_soft_deleted_image_excluded_from_list() {
     ).await.unwrap();
     assert_eq!(results.len(), 0);
 }
+
+// ── Derived status flag tests (pure function, no DB needed) ─────────────────
+
+/// "Active" must short-circuit the rollup. A root with both active and failed
+/// descendants is still "running" — the user shouldn't see a transient failure
+/// surface as "failed" while other descendants are still in flight.
+#[test]
+fn derived_status_active_overrides_failed() {
+    use randimg_backend_rs::db::query::task_tree::derived_status_from_flags;
+    assert_eq!(derived_status_from_flags(true,  true,  false, true),  "running");
+    assert_eq!(derived_status_from_flags(true,  true,  true,  true),  "running");
+    assert_eq!(derived_status_from_flags(true,  false, true,  true),  "running");
+    assert_eq!(derived_status_from_flags(true,  false, false, false), "running");
+}
+
+/// Once every descendant has settled, surface the terminal outcome.
+#[test]
+fn derived_status_terminal_outcomes() {
+    use randimg_backend_rs::db::query::task_tree::derived_status_from_flags;
+    // failed + completed → partial_success (mixed)
+    assert_eq!(derived_status_from_flags(false, true,  true,  true),  "partial_success");
+    // failed only, transient
+    assert_eq!(derived_status_from_flags(false, true,  false, false), "failed");
+    // completed only
+    assert_eq!(derived_status_from_flags(false, false, true,  false), "completed");
+    // nothing happened (rare: root Done with no descendants should not reach rollup,
+    // but if it does we degrade to "pending" rather than crashing)
+    assert_eq!(derived_status_from_flags(false, false, false, false), "pending");
+}
+
+/// When every failed descendant has reached the terminal `Killed` state and
+/// nothing succeeded, the subtree is dead — surface `killed`, not `failed` (the
+/// latter would imply retries are still possible).
+#[test]
+fn derived_status_all_killed_is_terminal_killed() {
+    use randimg_backend_rs::db::query::task_tree::derived_status_from_flags;
+    // has_failed == has_killed_terminal: every failure is terminal
+    assert_eq!(derived_status_from_flags(false, true, false, true), "killed");
+    // Mixed: some still transient `Failed` (has_killed_terminal < has_failed) →
+    // still "failed" (the user might be able to salvage something).
+    assert_eq!(derived_status_from_flags(false, true, false, false), "failed");
+}

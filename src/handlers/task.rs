@@ -16,6 +16,20 @@ use crate::error::AppError;
 
 /// Valid cleanup flag values.
 const CLEAN_COMPLETED: &str = "completed";
+
+/// Map short task type names (from frontend) to full Rust type paths stored in DB.
+fn map_task_type(short: &str) -> &str {
+    match short {
+        "crawl" => "randimg_backend_rs::task_queue::jobs::CrawlJob",
+        "download" => "randimg_backend_rs::task_queue::jobs::DownloadJob",
+        "color-extract" | "color_extract" => "randimg_backend_rs::task_queue::jobs::ColorExtractJob",
+        "upload" => "randimg_backend_rs::task_queue::jobs::UploadJob",
+        "accessibility-check" | "accessibility_check" => "randimg_backend_rs::task_queue::jobs::AccessibilityCheckJob",
+        "discover" => "randimg_backend_rs::task_queue::jobs::DiscoverJob",
+        "refresh-pixiv-token" | "refresh_pixiv_token" => "randimg_backend_rs::task_queue::jobs::RefreshPixivTokenJob",
+        other => other, // pass through if already a full path
+    }
+}
 const CLEAN_FAILED: &str = "failed";
 const CLEAN_CANCELLED: &str = "cancelled";
 const CLEAN_PENDING: &str = "pending";
@@ -140,6 +154,7 @@ async fn clean_tasks(
     }
 
     // Delete tasks — capture result without `?` so we can re-spawn workers even on error
+    let mapped_type = body.task_type.as_deref().map(map_task_type);
     let delete_result = if let Some(ct) = body.crawl_type {
         // crawl_type filter: find matching crawl task IDs first, then delete them
         let ids = query::apalis_job::find_crawl_ids_by_type(&state.db, ct)
@@ -155,7 +170,7 @@ async fn clean_tasks(
         query::apalis_job::delete_by_statuses(
             &state.db,
             &statuses,
-            body.task_type.as_deref(),
+            mapped_type,
         )
         .await
     };
@@ -333,10 +348,11 @@ pub async fn list_tasks(
 
     let db = &state.db;
     let mapped_status = q.status.as_deref().map(unmap_status);
+    let mapped_type = q.task_type.as_deref().map(map_task_type);
 
     let (rows, total) = tokio::try_join!(
-        query::apalis_job::list(db, q.task_type.as_deref(), mapped_status.clone(), limit, offset),
-        query::apalis_job::count(db, q.task_type.as_deref(), mapped_status),
+        query::apalis_job::list(db, mapped_type, mapped_status.clone(), limit, offset),
+        query::apalis_job::count(db, mapped_type, mapped_status),
     )
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -430,7 +446,8 @@ pub async fn delete_pending_tasks(
     _auth: AuthUser,
     Query(q): Query<DeletePendingQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let deleted = query::apalis_job::delete_pending(&state.db, q.task_type.as_deref())
+    let mapped_type = q.task_type.as_deref().map(map_task_type);
+    let deleted = query::apalis_job::delete_pending(&state.db, mapped_type)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -487,13 +504,14 @@ pub async fn list_roots(
     let limit = q.limit.unwrap_or(50).min(200);
     let offset = q.offset.unwrap_or(0);
     let db = &state.db;
+    let mapped_type = q.task_type.as_deref().map(map_task_type);
 
     // Filtering by derived status and pagination are pushed into the SQL CTE.
     // Run list + count in parallel.
     let (rows, total) = tokio::try_join!(
         query::task_tree::list_roots_derived(
             db,
-            q.task_type.as_deref(),
+            mapped_type,
             q.crawl_type,
             q.status.as_deref(),
             limit,
@@ -501,7 +519,7 @@ pub async fn list_roots(
         ),
         query::task_tree::count_roots_derived(
             db,
-            q.task_type.as_deref(),
+            mapped_type,
             q.crawl_type,
             q.status.as_deref(),
         ),
@@ -516,13 +534,35 @@ pub async fn list_roots(
                 r.has_active,
                 r.has_failed,
                 r.has_completed,
+                r.has_killed_terminal,
             );
 
-            // If root has no descendants (all flags false), fall back to its own status
-            let effective = if !r.has_active && !r.has_failed && !r.has_completed {
-                map_status(&r.status)
-            } else {
+            // Two-phase derivation:
+            //
+            // 1. Dead-subtree short-circuit: if every failed descendant is in the
+            //    terminal `Killed` state (no transient `Failed`), the subtree is
+            //    unsalvageable — surface `killed` even if the root itself is still
+            //    retrying. This matches the user's invariant: once all descendants
+            //    are definitively done with no path to success, the root's outcome
+            //    is `killed` regardless of its own Apalis status.
+            // 2. Root-priority: when no such short-circuit applies, the root's own
+            //    Apalis status wins. Only when the root has reached `completed` do
+            //    we consider the descendant rollup. A root with no descendants
+            //    naturally falls through to `completed`.
+            let root_mapped = map_status(&r.status);
+            let has_descendants = r.has_active || r.has_failed || r.has_completed;
+            let subtree_dead_terminal = !r.has_active
+                && r.has_failed
+                && !r.has_completed
+                && r.has_killed_terminal == r.has_failed;
+            let effective = if subtree_dead_terminal {
+                "killed"
+            } else if root_mapped != "completed" {
+                root_mapped
+            } else if has_descendants {
                 derived
+            } else {
+                "completed"
             };
 
             let run_at = fmt_ts(r.run_at);
@@ -632,10 +672,12 @@ pub async fn get_subtasks(
     let limit = q.limit.map(|l| l as u64);
     let offset = q.offset.map(|o| o as u64);
 
+    let mapped_type = q.task_type.as_deref().map(map_task_type);
+
     let total = query::task_tree::count_subtasks(
         &state.db,
         &task_id,
-        q.task_type.as_deref(),
+        mapped_type,
         mapped_status.as_deref(),
     )
     .await
@@ -644,7 +686,7 @@ pub async fn get_subtasks(
     let children = query::task_tree::list_subtasks(
         &state.db,
         &task_id,
-        q.task_type.as_deref(),
+        mapped_type,
         mapped_status.as_deref(),
         limit,
         offset,
@@ -698,8 +740,9 @@ pub async fn interrupt_subtasks(
     Path(task_id): Path<String>,
     Query(q): Query<InterruptSubtasksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let mapped_type = q.task_type.as_deref().map(map_task_type);
     let (cancelled_ids, _) =
-        query::task_tree::interrupt_subtasks(&state.db, &task_id, q.task_type.as_deref())
+        query::task_tree::interrupt_subtasks(&state.db, &task_id, mapped_type)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
