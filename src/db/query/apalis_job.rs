@@ -65,13 +65,7 @@ pub async fn delete_pending(
     db: &DatabaseConnection,
     task_type: Option<&str>,
 ) -> Result<u64, DbErr> {
-    let mut delete = ApalisJob::delete_many()
-        .filter(apalis_job::Column::Status.eq(apalis_job::STATUS_PENDING));
-    if let Some(tt) = task_type {
-        delete = delete.filter(apalis_job::Column::JobType.eq(tt));
-    }
-    let result = delete.exec(db).await?;
-    Ok(result.rows_affected)
+    delete_by_statuses(db, &[apalis_job::STATUS_PENDING], task_type).await
 }
 
 /// Bulk-delete jobs by statuses.
@@ -97,32 +91,42 @@ pub async fn delete_by_statuses(
     if let Some(tt) = task_type {
         q = q.filter(apalis_job::Column::JobType.eq(tt));
     }
-    let ids: Vec<String> = q
-        .into_tuple()
-        .all(db)
-        .await?;
+    let ids: Vec<String> = q.into_tuple().all(db).await?;
 
     if ids.is_empty() {
         return Ok(0);
     }
 
-    // Step 2: Delete task_dependency rows referencing these jobs as children
-    TaskDependency::delete_many()
-        .filter(DepCol::ChildJobId.is_in(&ids))
-        .exec(db)
-        .await?;
+    // Step 2 & 3: Delete dependencies and jobs atomically
+    let ids_clone = ids.clone();
+    let result = db.transaction::<_, u64, DbErr>(|txn| {
+        Box::pin(async move {
+            // Delete task_dependency rows where these jobs are children
+            TaskDependency::delete_many()
+                .filter(DepCol::ChildJobId.is_in(&ids_clone))
+                .exec(txn)
+                .await?;
 
-    // Also clean up rows where these jobs are parents
-    TaskDependency::delete_many()
-        .filter(DepCol::ParentJobId.is_in(&ids))
-        .exec(db)
-        .await?;
+            // Delete task_dependency rows where these jobs are parents
+            TaskDependency::delete_many()
+                .filter(DepCol::ParentJobId.is_in(&ids_clone))
+                .exec(txn)
+                .await?;
 
-    // Step 3: Delete the jobs themselves
-    let result = ApalisJob::delete_many()
-        .filter(apalis_job::Column::Id.is_in(&ids))
-        .exec(db)
-        .await?;
+            // Delete the jobs themselves
+            let result = ApalisJob::delete_many()
+                .filter(apalis_job::Column::Id.is_in(&ids_clone))
+                .exec(txn)
+                .await?;
 
-    Ok(result.rows_affected)
+            Ok(result.rows_affected)
+        })
+    })
+    .await
+    .map_err(|e| match e {
+        TransactionError::Connection(e) => e,
+        TransactionError::Transaction(e) => e,
+    })?;
+
+    Ok(result)
 }
