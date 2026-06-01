@@ -54,3 +54,18 @@ pub async fn delete_by_id(
         .await?;
     Ok(result.rows_affected > 0)
 }
+
+/// Delete all pending jobs, optionally filtered by job type.
+/// Returns the number of rows deleted.
+pub async fn delete_pending(
+    db: &DatabaseConnection,
+    task_type: Option<&str>,
+) -> Result<u64, DbErr> {
+    let mut delete = ApalisJob::delete_many()
+        .filter(apalis_job::Column::Status.eq(apalis_job::STATUS_PENDING));
+    if let Some(tt) = task_type {
+        delete = delete.filter(apalis_job::Column::JobType.eq(tt));
+    }
+    let result = delete.exec(db).await?;
+    Ok(result.rows_affected)
+}
