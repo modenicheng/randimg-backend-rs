@@ -73,3 +73,56 @@ pub async fn delete_pending(
     let result = delete.exec(db).await?;
     Ok(result.rows_affected)
 }
+
+/// Bulk-delete jobs by statuses.
+///
+/// Deletes from both `Jobs` and `task_dependencies` (as child) to avoid
+/// orphaned dependency rows. Returns the number of jobs deleted.
+pub async fn delete_by_statuses(
+    db: &DatabaseConnection,
+    statuses: &[&str],
+    task_type: Option<&str>,
+) -> Result<u64, DbErr> {
+    use crate::db::entities::task_dependency::{Entity as TaskDependency, Column as DepCol};
+
+    if statuses.is_empty() {
+        return Ok(0);
+    }
+
+    // Step 1: Find job IDs matching the filters
+    let mut q = ApalisJob::find()
+        .select_only()
+        .column(apalis_job::Column::Id)
+        .filter(apalis_job::Column::Status.is_in(statuses.iter().copied()));
+    if let Some(tt) = task_type {
+        q = q.filter(apalis_job::Column::JobType.eq(tt));
+    }
+    let ids: Vec<String> = q
+        .into_tuple()
+        .all(db)
+        .await?;
+
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    // Step 2: Delete task_dependency rows referencing these jobs as children
+    TaskDependency::delete_many()
+        .filter(DepCol::ChildJobId.is_in(&ids))
+        .exec(db)
+        .await?;
+
+    // Also clean up rows where these jobs are parents
+    TaskDependency::delete_many()
+        .filter(DepCol::ParentJobId.is_in(&ids))
+        .exec(db)
+        .await?;
+
+    // Step 3: Delete the jobs themselves
+    let result = ApalisJob::delete_many()
+        .filter(apalis_job::Column::Id.is_in(&ids))
+        .exec(db)
+        .await?;
+
+    Ok(result.rows_affected)
+}
