@@ -123,7 +123,7 @@ async fn main() {
     }
 
     // --- Apalis workers -------------------------------------------------------
-    let worker_handles = spawn_workers(state.clone(), &apalis_pool);
+    let worker_handles = spawn_workers(state.clone(), &apalis_pool).await;
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -212,7 +212,7 @@ async fn shutdown_signal() {
 }
 
 /// Spawn Apalis workers for all job types. Returns handles for graceful shutdown.
-fn spawn_workers(
+async fn spawn_workers(
     state: Arc<AppState>,
     _pool: &ApalisPool,
 ) -> Vec<tokio::task::JoinHandle<()>> {
@@ -222,7 +222,7 @@ fn spawn_workers(
     // Clones the storage out of the Mutex (shares the same pool).
     macro_rules! spawn_worker {
         ($name:expr, $storage:expr, $handler:expr, $concurrency:expr) => {{
-            let storage = $storage.blocking_lock().clone();
+            let storage = $storage.lock().await.clone();
             let state = state.clone();
             let js_clone = js.clone();
             let handle = tokio::spawn(async move {
