@@ -80,31 +80,35 @@ fn fmt_ts(ts: chrono::DateTime<chrono::Utc>) -> String {
 
 fn row_to_json(t: &apalis_job::Model) -> serde_json::Value {
     #[cfg(feature = "sqlite")]
-    let created_at = fmt_ts(t.run_at);
+    let run_at = fmt_ts(t.run_at);
     #[cfg(feature = "postgres")]
-    let created_at = Some(fmt_ts(t.run_at));
+    let run_at = Some(fmt_ts(t.run_at));
 
     #[cfg(feature = "sqlite")]
-    let finished_at = t.done_at.and_then(fmt_ts);
+    let done_at = t.done_at.and_then(fmt_ts);
     #[cfg(feature = "postgres")]
-    let finished_at = t.done_at.map(fmt_ts);
+    let done_at = t.done_at.map(fmt_ts);
 
     #[cfg(feature = "sqlite")]
     let last_result = t.last_result.clone();
     #[cfg(feature = "postgres")]
     let last_result = t.last_result.as_ref().map(|v| v.to_string());
 
+    // Deserialize the job BLOB to extract the payload.
+    // Apalis JsonCodec<Vec<u8>> serializes the job struct directly (no wrapper).
+    let payload = serde_json::from_slice::<serde_json::Value>(&t.job).ok();
+
     serde_json::json!({
         "id": t.id,
-        "task_type": t.job_type,
+        "job_type": t.job_type,
         "status": map_status(&t.status),
         "priority": t.priority,
-        "retry_count": t.attempts,
-        "retries": t.max_attempts,
-        "created_at": created_at,
-        "started_at": serde_json::Value::Null,
-        "finished_at": finished_at,
+        "attempts": t.attempts,
+        "max_attempts": t.max_attempts,
+        "run_at": run_at,
+        "done_at": done_at,
         "last_result": last_result,
+        "payload": payload,
     })
 }
 

@@ -27,6 +27,22 @@ pub struct Model {
     #[cfg(feature = "postgres")]
     pub last_result: Option<JsonValue>,
     pub priority: i32,
+    /// Serialized job payload (BLOB).
+    pub job: Vec<u8>,
+    /// When the worker locked this job for execution.
+    #[cfg(feature = "sqlite")]
+    pub lock_at: Option<i64>,
+    #[cfg(feature = "postgres")]
+    pub lock_at: Option<DateTimeWithTimeZone>,
+    /// Worker ID that locked this job.
+    pub lock_by: Option<String>,
+    /// Arbitrary metadata JSON.
+    #[cfg(feature = "sqlite")]
+    pub metadata: Option<String>,
+    #[cfg(feature = "postgres")]
+    pub metadata: Option<JsonValue>,
+    /// Idempotency key for deduplication.
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
