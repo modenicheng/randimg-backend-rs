@@ -1,10 +1,7 @@
-use apalis::layers::retry::RetryPolicy;
-use apalis::prelude::*;
 use axum::Router;
 use randimg_backend_rs::config::{AppConfig, BindAddr};
-use randimg_backend_rs::task_queue::handlers::*;
 use randimg_backend_rs::task_queue::jobs::*;
-use randimg_backend_rs::{AppState, ApalisPool, db, db::query, db_backend, handlers};
+use randimg_backend_rs::{AppState, db, db::query, db_backend, handlers};
 use std::sync::Arc;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
@@ -125,7 +122,7 @@ async fn main() {
     }
 
     // --- Apalis workers -------------------------------------------------------
-    let worker_handles = spawn_workers(state.clone(), &apalis_pool).await;
+    let worker_handles = randimg_backend_rs::spawn_workers(state.clone(), &apalis_pool).await;
     *state.worker_handles.lock().await = worker_handles;
 
     let cors = CorsLayer::new()
@@ -216,54 +213,4 @@ async fn shutdown_signal() {
             tracing::info!("Received SIGTERM");
         }
     }
-}
-
-/// Spawn Apalis workers for all job types. Returns handles for graceful shutdown.
-async fn spawn_workers(
-    state: Arc<AppState>,
-    _pool: &ApalisPool,
-) -> Vec<tokio::task::JoinHandle<()>> {
-    let js = &state.job_storage;
-
-    // Helper macro to build and spawn a worker.
-    // Clones the storage out of the Mutex (shares the same pool).
-    macro_rules! spawn_worker {
-        ($name:expr, $storage:expr, $handler:expr, $concurrency:expr) => {{
-            let storage = $storage.lock().await.clone();
-            let state = state.clone();
-            let js_clone = js.clone();
-            let handle = tokio::spawn(async move {
-                let worker = WorkerBuilder::new($name)
-                    .backend(storage)
-                    .data(state.clone())
-                    .data(js_clone.clone())
-                    .concurrency($concurrency)
-                    .retry(RetryPolicy::retries(3))
-                    .enable_tracing()
-                    .build($handler);
-                worker.run().await.ok();
-            });
-            handle
-        }};
-    }
-
-    vec![
-        spawn_worker!("crawl", js.crawl, handle_crawl, 2),
-        spawn_worker!("download", js.download, handle_download, 4),
-        spawn_worker!("color-extract", js.color_extract, handle_color_extract, 2),
-        spawn_worker!("upload", js.upload, handle_upload, 2),
-        spawn_worker!(
-            "accessibility-check",
-            js.accessibility_check,
-            handle_accessibility_check,
-            2
-        ),
-        spawn_worker!("discover", js.discover, handle_discover, 1),
-        spawn_worker!(
-            "refresh-pixiv-token",
-            js.refresh_pixiv_token,
-            handle_refresh_pixiv_token,
-            1
-        ),
-    ]
 }

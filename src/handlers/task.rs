@@ -3,7 +3,7 @@ use axum::{
     extract::Path,
     extract::Query,
     extract::State,
-    routing::{delete, get},
+    routing::{delete, get, post},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -14,10 +14,115 @@ use crate::db::entities::apalis_job;
 use crate::db::query;
 use crate::error::AppError;
 
+/// Valid cleanup flag values.
+const CLEAN_COMPLETED: &str = "completed";
+const CLEAN_FAILED: &str = "failed";
+const CLEAN_CANCELLED: &str = "cancelled";
+const CLEAN_PENDING: &str = "pending";
+const CLEAN_RUNNING: &str = "running";
+const CLEAN_ALL: &str = "all";
+
+#[derive(Debug, Deserialize)]
+pub struct CleanTasksRequest {
+    /// List of status flags to clean: "completed", "failed", "cancelled", "pending", "running", "all".
+    pub flags: Vec<String>,
+    /// Optional: only clean tasks of this job type.
+    #[serde(default)]
+    pub task_type: Option<String>,
+}
+
+/// POST /tasks/clean
+///
+/// Bulk-delete tasks by status flags. Supports: completed, failed, cancelled, pending, running, all.
+/// The "running" and "all" flags will abort all workers before deleting.
+async fn clean_tasks(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Json(body): Json<CleanTasksRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let flags: Vec<&str> = body.flags.iter().map(|s| s.as_str()).collect();
+
+    // Validate flags
+    let valid_flags = [
+        CLEAN_COMPLETED,
+        CLEAN_FAILED,
+        CLEAN_CANCELLED,
+        CLEAN_PENDING,
+        CLEAN_RUNNING,
+        CLEAN_ALL,
+    ];
+    if flags.is_empty() {
+        return Err(AppError::BadRequest("At least one flag is required".into()));
+    }
+    for f in &flags {
+        if !valid_flags.contains(f) {
+            return Err(AppError::BadRequest(format!("Invalid flag: '{}'. Valid flags: {:?}", f, valid_flags)));
+        }
+    }
+
+    let should_abort_workers = (flags.contains(&CLEAN_RUNNING) || flags.contains(&CLEAN_ALL))
+        && body.task_type.is_none();
+
+    // Resolve flags to Apalis status constants
+    let mut statuses: Vec<&str> = Vec::new();
+    for f in &flags {
+        match *f {
+            CLEAN_COMPLETED => statuses.push(apalis_job::STATUS_DONE),
+            CLEAN_FAILED => statuses.push(apalis_job::STATUS_FAILED),
+            CLEAN_CANCELLED => statuses.push(apalis_job::STATUS_KILLED),
+            CLEAN_PENDING => statuses.push(apalis_job::STATUS_PENDING),
+            CLEAN_RUNNING => statuses.push(apalis_job::STATUS_RUNNING),
+            CLEAN_ALL => {
+                statuses.push(apalis_job::STATUS_DONE);
+                statuses.push(apalis_job::STATUS_FAILED);
+                statuses.push(apalis_job::STATUS_KILLED);
+                statuses.push(apalis_job::STATUS_PENDING);
+                statuses.push(apalis_job::STATUS_RUNNING);
+            }
+            _ => unreachable!("flag already validated"),
+        }
+    }
+    statuses.sort();
+    statuses.dedup();
+
+    // Abort workers first if requested (only when no task_type filter)
+    if should_abort_workers {
+        let handles = {
+            let mut guard = state.worker_handles.lock().await;
+            std::mem::take(&mut *guard)
+        };
+        for h in &handles {
+            h.abort();
+        }
+        tracing::info!("Aborted {} Apalis workers for cleanup", handles.len());
+    }
+
+    // Delete tasks
+    let deleted = query::apalis_job::delete_by_statuses(
+        &state.db,
+        &statuses,
+        body.task_type.as_deref(),
+    )
+    .await?;
+
+    // Re-spawn workers if they were aborted
+    if should_abort_workers {
+        let new_handles = crate::spawn_workers(state.clone(), &state.apalis_pool).await;
+        *state.worker_handles.lock().await = new_handles;
+        tracing::info!("Re-spawned Apalis workers after cleanup");
+    }
+
+    Ok(Json(serde_json::json!({
+        "deleted": deleted,
+        "flags": body.flags,
+    })))
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // Static segments MUST precede dynamic ones so Axum matches them first.
         .route("/tasks", get(list_tasks))
+        .route("/tasks/clean", post(clean_tasks))
         .route("/tasks/roots", get(list_roots))
         .route("/tasks/pending", delete(delete_pending_tasks))
         .route(
