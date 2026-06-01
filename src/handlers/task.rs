@@ -17,6 +17,8 @@ use crate::error::AppError;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/tasks", get(list_tasks))
+        // NOTE: `/tasks/pending` must be registered before `/tasks/{task_id}` —
+        // Axum prioritizes static segments over dynamic params.
         .route("/tasks/pending", delete(delete_pending_tasks))
         .route("/tasks/{task_id}", get(get_task).delete(delete_task))
 }
