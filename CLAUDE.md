@@ -45,6 +45,19 @@ Uses the Apalis library with `apalis-sqlite` (dev) / `apalis-postgres` (prod) fo
 
 **Job pipeline**: Crawl → Download → (ColorExtract + Upload + AccessibilityCheck in parallel) → Discover. Parent-child relationships are tracked in `task_dependencies` table. `DownloadJob` has a `root_job_id` so downstream tasks appear as direct children of the crawl task. `db_backend.rs` provides `push_*_with_parent()` methods that pre-generate ULIDs to record hierarchy before jobs execute.
 
+#### Color worker process isolation
+
+The color extraction worker (KMeans + rayon) is CPU-intensive. Two modes:
+
+1. **In-process** (default): color-extract runs as an Apalis worker inside the main binary. `spawn_blocking` + dedicated rayon pool (`src/color/mod.rs::run_on_color_pool`) prevent it from blocking the async runtime.
+
+2. **Separate process** (`COLOR_WORKER_STANDALONE=true`): the main binary skips spawning the color-extract worker. Run `cargo run --bin color-worker` as a separate process. Both binaries connect to the same database; Apalis storage handles coordination.
+
+Environment variables:
+- `COLOR_WORKER_STANDALONE` — `true` to exclude color-extract from main binary
+- `COLOR_WORKER_RAYON_THREADS` — rayon thread count for color extraction (default: CPU count)
+- `COLOR_WORKER_AUTO_SPAWN` — `true` to auto-spawn color-worker as child process from main
+
 #### Apalis status semantics — "Killed" means "retries exhausted", NOT "manually cancelled"
 
 This is a common source of confusion. Apalis's `calculate_status()` (in both `apalis-sqlite` and `apalis-postgres`) uses these rules:
