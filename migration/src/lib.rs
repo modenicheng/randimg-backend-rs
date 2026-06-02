@@ -12,6 +12,7 @@ mod m20260531_000006_create_pixiv_credentials;
 mod m20260601_000001_create_task_hierarchy;
 mod m20260601_000002_fix_task_hierarchy_fk;
 mod m20260602_000001_add_downloaded;
+mod m20260603_000001_add_illust_metadata;
 
 pub struct Migrator;
 
@@ -28,6 +29,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260601_000001_create_task_hierarchy::Migration),
             Box::new(m20260601_000002_fix_task_hierarchy_fk::Migration),
             Box::new(m20260602_000001_add_downloaded::Migration),
+            Box::new(m20260603_000001_add_illust_metadata::Migration),
         ]
     }
 }
