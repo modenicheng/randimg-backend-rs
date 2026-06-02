@@ -12,6 +12,7 @@ use crate::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::db::entities::apalis_job;
 use crate::db::query;
+use crate::db::query::task_tree::ChildJobNode;
 use crate::error::AppError;
 
 /// Valid cleanup flag values.
@@ -613,6 +614,23 @@ pub async fn list_roots(
 ///   ]
 /// }
 /// ```
+fn flatten_tree(nodes: &[ChildJobNode], parent_id: &str, root_id: &str) -> Vec<serde_json::Value> {
+    let mut result = Vec::new();
+    for node in nodes {
+        let mut job = node.job.clone();
+        if let serde_json::Value::Object(ref mut map) = job {
+            map.insert("parent_job_id".to_string(), serde_json::Value::String(parent_id.to_string()));
+            map.insert("root_job_id".to_string(), serde_json::Value::String(root_id.to_string()));
+        }
+        result.push(job);
+        let node_id = node.job.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        result.extend(flatten_tree(&node.children, node_id, root_id));
+    }
+    result
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TaskTreeQuery {
     pub flatten: Option<bool>,
@@ -622,22 +640,30 @@ pub async fn get_task_tree(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
     Path(task_id): Path<String>,
-    Query(_q): Query<TaskTreeQuery>,
+    Query(q): Query<TaskTreeQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let tree = query::task_tree::list_children(
         &state.db,
         &task_id,
-        None, // task_type filter  – export as-is
-        None, // status filter
-        20,   // max recursion depth to guard against circular references
+        None,
+        None,
+        20,
     )
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    Ok(Json(serde_json::json!({
-        "root_job_id": task_id,
-        "children": tree,
-    })))
+    if q.flatten.unwrap_or(false) {
+        let tasks = flatten_tree(&tree, &task_id, &task_id);
+        Ok(Json(serde_json::json!({
+            "root_job_id": task_id,
+            "tasks": tasks,
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "root_job_id": task_id,
+            "children": tree,
+        })))
+    }
 }
 
 // ── GET /tasks/{id}/subtasks ────────────────────────────────────────────────
