@@ -32,18 +32,21 @@ pub async fn handle_crawl(
         .await
         .map_err(|e| format!("Failed to mark crawler running: {}", e))?;
 
-    // Create and authenticate Pixiv API
-    let api = crate::pixiv::create_api(&state.config.pixiv_proxy);
+    // Authenticate Pixiv API: reuse stored token if valid, otherwise refresh
+    let api = crate::pixiv::create_api(&state.config.pixiv_proxy, &state.config.pixiv_accept_lang).await;
     if let Some(cred) = query::pixiv_credential::find_one_active_random(&state.db)
         .await
         .map_err(|e| format!("Failed to fetch credential: {}", e))?
     {
-        api.auth(&cred.refresh_token)
-            .await
-            .map_err(|e| format!("Pixiv auth failed: {}", e))?;
-        if let Some(new_token) = api.current_refresh_token().await {
-            let _ =
-                query::pixiv_credential::update_token(&state.db, cred.id, &new_token, None).await;
+        if let Some(at) = &cred.access_token {
+            // Use stored token — no Pixiv API call
+            let user_id = cred.pixiv_user_id.parse::<u64>().unwrap_or(0);
+            api.set_auth(at, &cred.refresh_token, user_id).await;
+        } else {
+            // No stored token, must authenticate
+            api.auth(&cred.refresh_token)
+                .await
+                .map_err(|e| format!("Pixiv auth failed: {}", e))?;
         }
         let _ = query::pixiv_credential::touch_last_used(&state.db, cred.id).await;
     }
@@ -70,9 +73,9 @@ pub async fn handle_crawl(
             if let Err(e) = storage
                 .push_discover_with_parent(DiscoverJob {
                     hop: 0,
-                    max_hops: None,
-                    seed_limit: None,
-                    seed_method: None,
+                    max_hops: job.discover_hops,
+                    seed_limit: job.discover_seed_limit,
+                    seed_method: job.discover_seed_method.clone(),
                     parent_job_id: Some(current_id.clone()),
                 }, &state.db)
                 .await
@@ -97,9 +100,11 @@ async fn crawl_ranking(
 ) -> Result<(), String> {
     let start_date = job.target_start_date.as_deref();
     let date = start_date.map(|s| if s.len() >= 10 { &s[..10] } else { s });
-    let mode = "day";
+    let mode = job.ranking_mode.as_deref().unwrap_or("day");
+    let max_pages = job.max_pages.unwrap_or(0);
 
     let mut offset = 0u32;
+    let mut pages_processed = 0u32;
     loop {
         let resp = api
             .illust_ranking(Some(mode), date, Some(offset))
@@ -129,6 +134,12 @@ async fn crawl_ranking(
             }
         }
 
+        pages_processed += 1;
+        if max_pages > 0 && pages_processed >= max_pages {
+            tracing::info!(max_pages, "Reached page limit for ranking crawl");
+            break;
+        }
+
         if data.next_url.is_none() {
             break;
         }
@@ -152,10 +163,14 @@ async fn crawl_user(
         .parse::<u64>()
         .map_err(|_| "invalid target_user_id")?;
 
+    let illust_type = job.illust_type.as_deref().unwrap_or("illust");
+    let max_pages = job.max_pages.unwrap_or(0);
+
     let mut offset = 0u32;
+    let mut pages_processed = 0u32;
     loop {
         let resp = api
-            .user_illusts(user_id, Some("illust"), Some(offset))
+            .user_illusts(user_id, Some(illust_type), Some(offset))
             .await
             .map_err(|e| format!("User illusts API error: {}", e))?;
 
@@ -182,6 +197,12 @@ async fn crawl_user(
             }
         }
 
+        pages_processed += 1;
+        if max_pages > 0 && pages_processed >= max_pages {
+            tracing::info!(max_pages, user_id, "Reached page limit for user crawl");
+            break;
+        }
+
         if data.next_url.is_none() {
             break;
         }
@@ -204,8 +225,10 @@ async fn crawl_bookmarks(
         .ok_or("Not authenticated or no user_id")?;
 
     let tags = job.target_search_prompt.as_deref();
+    let max_pages = job.max_pages.unwrap_or(0);
 
     let mut max_bookmark_id: Option<u64> = None;
+    let mut pages_processed = 0u32;
     loop {
         let resp = api
             .user_bookmarks_illust(user_id, Some("public"), max_bookmark_id, tags)
@@ -233,6 +256,12 @@ async fn crawl_bookmarks(
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }
+        }
+
+        pages_processed += 1;
+        if max_pages > 0 && pages_processed >= max_pages {
+            tracing::info!(max_pages, "Reached page limit for bookmarks crawl");
+            break;
         }
 
         if let Some(next_url) = &data.next_url {
@@ -266,7 +295,7 @@ async fn save_illust(
 
     let user = illust.user.as_ref();
     let author_name = user.and_then(|u| u.name.as_deref()).unwrap_or("unknown");
-    let author_id_str = user.map(|u| u.id.to_string());
+    let author_id_str = user.and_then(|u| u.id.map(|id| id.to_string()));
 
     let author =
         query::author::find_or_create(db, author_name, Some("pixiv"), author_id_str.as_deref())
@@ -416,6 +445,61 @@ fn extract_param_from_url(url: &str, param: &str) -> Option<String> {
         .map(|v| v.to_string())
 }
 
+/// Mark an image as downloaded in the database.
+async fn mark_downloaded(db: &sea_orm::DatabaseConnection, image_id: i32) -> Result<(), sea_orm::DbErr> {
+    use crate::db::entities::image::{self, Entity as Image};
+    if let Some(img) = Image::find_by_id(image_id).one(db).await? {
+        let mut active: image::ActiveModel = img.into();
+        active.downloaded = Set(true);
+        active.update(db).await?;
+    }
+    Ok(())
+}
+
+/// Spawn downstream pipeline tasks (color extract, upload, accessibility check)
+/// as children of the root crawl job.
+async fn spawn_downstream_children(
+    job: &DownloadJob,
+    current_id: &str,
+    storage: &JobStorage,
+    db: &sea_orm::DatabaseConnection,
+) {
+    let upstream_id = job.root_job_id.as_deref().unwrap_or(current_id);
+
+    if let Err(e) = storage
+        .push_color_extract_with_parent(ColorExtractJob {
+            image_id: job.image_id,
+            image_path: job.image_path.clone(),
+            parent_job_id: Some(upstream_id.to_string()),
+        }, db)
+        .await
+    {
+        tracing::error!(image_id = job.image_id, "Failed to submit color_extract task: {}", e);
+    }
+
+    if let Err(e) = storage
+        .push_upload_with_parent(UploadJob {
+            image_id: job.image_id,
+            image_path: job.image_path.clone(),
+            parent_job_id: Some(upstream_id.to_string()),
+        }, db)
+        .await
+    {
+        tracing::error!(image_id = job.image_id, "Failed to submit upload task: {}", e);
+    }
+
+    if let Err(e) = storage
+        .push_accessibility_check_with_parent(AccessibilityCheckJob {
+            image_id: job.image_id,
+            image_path: job.image_path.clone(),
+            parent_job_id: Some(upstream_id.to_string()),
+        }, db)
+        .await
+    {
+        tracing::error!(image_id = job.image_id, "Failed to submit accessibility_check task: {}", e);
+    }
+}
+
 /// Download a single image from Pixiv to local disk.
 pub async fn handle_download(
     job: DownloadJob,
@@ -424,9 +508,35 @@ pub async fn handle_download(
     storage: Data<JobStorage>,
 ) -> Result<(), BoxDynError> {
     let current_id = task_id.to_string();
+    let file_path = format!("{}/{}", state.config.image_dir, job.image_path);
 
-    let client = reqwest::Client::new();
-    let resp = client
+    // 1. Check if file already exists on disk
+    if tokio::fs::metadata(&file_path).await.is_ok() {
+        tracing::info!("File already exists on disk, skipping download: {}", job.image_path);
+        if let Err(e) = mark_downloaded(&state.db, job.image_id).await {
+            tracing::warn!(image_id = job.image_id, "Failed to mark as downloaded: {}", e);
+        }
+        spawn_downstream_children(&job, &current_id, &storage, &state.db).await;
+        return Ok(());
+    }
+
+    // 2. Check DB downloaded flag — if true but file is missing, log warning and re-download
+    {
+        use crate::db::entities::image::Entity as Image;
+        if let Some(img) = Image::find_by_id(job.image_id).one(&state.db).await? {
+            if img.downloaded {
+                tracing::warn!(
+                    image_id = job.image_id,
+                    "DB says downloaded but file missing, re-downloading: {}",
+                    job.image_path
+                );
+            }
+        }
+    }
+
+    // 3. Perform the actual download
+    let resp = state
+        .http_client
         .get(&job.source_image_url)
         .header("Referer", "https://app-api.pixiv.net/")
         .send()
@@ -442,8 +552,6 @@ pub async fn handle_download(
         .await
         .map_err(|e| format!("Failed to read response: {}", e))?;
 
-    let file_path = format!("{}/{}", state.config.image_dir, job.image_path);
-
     if let Some(parent) = std::path::Path::new(&file_path).parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -456,59 +564,45 @@ pub async fn handle_download(
 
     tracing::info!("Downloaded image {} to {}", job.image_id, file_path);
 
-    // Spawn downstream pipeline tasks as children of the root crawl job.
-    let upstream_id = job.root_job_id.as_deref().unwrap_or(&current_id);
-
-    if let Err(e) = storage
-        .push_color_extract_with_parent(ColorExtractJob {
-            image_id: job.image_id,
-            image_path: job.image_path.clone(),
-            parent_job_id: Some(upstream_id.to_string()),
-        }, &state.db)
-        .await
-    {
-        tracing::error!(image_id = job.image_id, "Failed to submit color_extract task: {}", e);
+    // 4. Mark as downloaded in DB
+    if let Err(e) = mark_downloaded(&state.db, job.image_id).await {
+        tracing::warn!(image_id = job.image_id, "Failed to mark as downloaded: {}", e);
     }
 
-    if let Err(e) = storage
-        .push_upload_with_parent(UploadJob {
-            image_id: job.image_id,
-            image_path: job.image_path.clone(),
-            parent_job_id: Some(upstream_id.to_string()),
-        }, &state.db)
-        .await
-    {
-        tracing::error!(image_id = job.image_id, "Failed to submit upload task: {}", e);
-    }
-
-    if let Err(e) = storage
-        .push_accessibility_check_with_parent(AccessibilityCheckJob {
-            image_id: job.image_id,
-            image_path: job.image_path,
-            parent_job_id: Some(upstream_id.to_string()),
-        }, &state.db)
-        .await
-    {
-        tracing::error!(image_id = job.image_id, "Failed to submit accessibility_check task: {}", e);
-    }
+    // 5. Spawn downstream pipeline tasks
+    spawn_downstream_children(&job, &current_id, &storage, &state.db).await;
 
     Ok(())
 }
 
 /// Extract color palette from a downloaded image.
+///
+/// The heavy computation (image decode + KMeans) is offloaded to
+/// `spawn_blocking` so it runs on tokio's blocking thread pool,
+/// not on the async worker threads. Combined with the dedicated
+/// rayon pool inside `extract_theme_colors`, this ensures color
+/// extraction never blocks the async runtime.
 pub async fn handle_color_extract(
     job: ColorExtractJob,
     _task_id: TaskId<Ulid>,
     state: Data<Arc<AppState>>,
 ) -> Result<(), BoxDynError> {
-    let file_path = format!("{}/{}", state.config.image_dir, job.image_path);
-    let img = ::image::open(&file_path).map_err(|e| format!("Failed to open image: {}", e))?;
+    let image_dir = state.config.image_dir.clone();
+    let image_id = job.image_id;
 
-    let colors = crate::color::extract_theme_colors(&img);
+    // CPU-heavy work: image decode + KMeans on blocking thread pool
+    let colors = tokio::task::spawn_blocking(move || {
+        let full_path = format!("{}/{}", image_dir, job.image_path);
+        let img = ::image::open(&full_path)
+            .map_err(|e| format!("Failed to open image: {}", e))?;
+        Ok::<_, String>(crate::color::extract_theme_colors(&img))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking panicked: {}", e))??;
 
-    // Update images table
+    // DB writes stay on the async runtime (they are I/O-bound)
     use crate::db::entities::image::{self, Entity as Image};
-    if let Some(img_model) = Image::find_by_id(job.image_id)
+    if let Some(img_model) = Image::find_by_id(image_id)
         .one(&state.db)
         .await
         .map_err(|e| e.to_string())?
@@ -525,7 +619,7 @@ pub async fn handle_color_extract(
     use crate::db::entities::image_color_palette::{self, Entity as PaletteEntity};
 
     PaletteEntity::delete_many()
-        .filter(image_color_palette::Column::ImageId.eq(job.image_id))
+        .filter(image_color_palette::Column::ImageId.eq(image_id))
         .exec(&state.db)
         .await
         .map_err(|e| format!("Failed to clear old palette: {}", e))?;
@@ -538,7 +632,7 @@ pub async fn handle_color_extract(
     {
         let entry = image_color_palette::ActiveModel {
             id: sea_orm::NotSet,
-            image_id: Set(job.image_id),
+            image_id: Set(image_id),
             color_index: Set(i as i32),
             rgb_r: Set(rgb[0] as i32),
             rgb_g: Set(rgb[1] as i32),
@@ -647,18 +741,21 @@ pub async fn handle_discover(
 
     tracing::info!(count = seeds.len(), "Selected discover seeds");
 
-    // Create and authenticate Pixiv API
-    let api = crate::pixiv::create_api(&state.config.pixiv_proxy);
+    // Authenticate Pixiv API: reuse stored token if valid, otherwise refresh
+    let api = crate::pixiv::create_api(&state.config.pixiv_proxy, &state.config.pixiv_accept_lang).await;
     if let Some(cred) = query::pixiv_credential::find_one_active_random(&state.db)
         .await
         .map_err(|e| format!("Failed to fetch credential: {}", e))?
     {
-        api.auth(&cred.refresh_token)
-            .await
-            .map_err(|e| format!("Pixiv auth failed: {}", e))?;
-        if let Some(new_token) = api.current_refresh_token().await {
-            let _ =
-                query::pixiv_credential::update_token(&state.db, cred.id, &new_token, None).await;
+        if let Some(at) = &cred.access_token {
+            // Use stored token — no Pixiv API call
+            let user_id = cred.pixiv_user_id.parse::<u64>().unwrap_or(0);
+            api.set_auth(at, &cred.refresh_token, user_id).await;
+        } else {
+            // No stored token, must authenticate
+            api.auth(&cred.refresh_token)
+                .await
+                .map_err(|e| format!("Pixiv auth failed: {}", e))?;
         }
         let _ = query::pixiv_credential::touch_last_used(&state.db, cred.id).await;
     }
@@ -736,7 +833,7 @@ pub async fn handle_refresh_pixiv_token(
         "Starting Pixiv token refresh"
     );
 
-    let api = crate::pixiv::create_api(&state.config.pixiv_proxy);
+    let api = crate::pixiv::create_api(&state.config.pixiv_proxy, &state.config.pixiv_accept_lang).await;
 
     api.auth(&cred.refresh_token).await.map_err(|e| {
         let msg = format!("Pixiv auth failed for credential {}: {}", credential_id, e);
