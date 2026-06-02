@@ -391,7 +391,12 @@ pub async fn list_images(
                 "width": img.width,
                 "height": img.height,
                 "primary_color": primary_color,
-                "author": auth.id,
+                "author": {
+                    "id": auth.id,
+                    "name": auth.name,
+                    "platform_id": auth.platform_id,
+                    "platform": auth.platform,
+                },
                 "tags": tags_json,
             }));
         }

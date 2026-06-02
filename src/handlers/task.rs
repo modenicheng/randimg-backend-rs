@@ -253,18 +253,15 @@ fn unmap_status(status: &str) -> Vec<&'static str> {
 // Timestamp formatting (feature-gated for SQLite i64 vs Postgres DateTime)
 // ---------------------------------------------------------------------------
 
-/// UTC+8 timezone offset (Asia/Shanghai).
-const UTC8: chrono::FixedOffset = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
-
 #[cfg(feature = "sqlite")]
 fn fmt_ts(ts: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(ts, 0)
-        .map(|dt| dt.with_timezone(&UTC8).format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 
 #[cfg(feature = "postgres")]
 fn fmt_ts(ts: chrono::DateTime<chrono::Utc>) -> String {
-    ts.with_timezone(&UTC8).format("%Y-%m-%d %H:%M:%S").to_string()
+    ts.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 // ---------------------------------------------------------------------------
