@@ -59,7 +59,24 @@ async fn main() {
 
     let db = db::init_database(&config.database_url).await;
 
-    let oss = randimg_backend_rs::dogecloud::DogeCloudOss::new(&config);
+    // Build a shared reqwest::Client with proxy and timeout.
+    // All HTTP requests (Pixiv downloads, DogeCloud API, etc.) reuse this single client
+    // for connection pooling and consistent configuration.
+    let mut http_builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent("PixivAndroidApp/5.0.234 (Android 11; Pixel 5)");
+
+    if !config.pixiv_proxy.is_empty() {
+        if let Ok(proxy) = reqwest::Proxy::all(&config.pixiv_proxy) {
+            http_builder = http_builder.proxy(proxy);
+        }
+    }
+
+    let http_client = http_builder
+        .build()
+        .expect("Failed to build shared HTTP client");
+
+    let oss = randimg_backend_rs::dogecloud::DogeCloudOss::new(&config, http_client.clone());
 
     // --- Apalis job queue setup ------------------------------------------------
     let (apalis_pool, job_storage) = db_backend::init(&config.database_url)
@@ -72,6 +89,7 @@ async fn main() {
         oss,
         job_storage,
         apalis_pool: apalis_pool.clone(),
+        http_client,
         worker_handles: Arc::new(tokio::sync::Mutex::new(Vec::new())),
     });
 
@@ -100,10 +118,23 @@ async fn main() {
         }
     }
 
-    // Submit a refresh task for every active credential
+    // Submit a refresh task for active credentials with stale tokens
+    // (skip if token was refreshed within the last 50 minutes)
+    let stale_threshold = chrono::Utc::now().naive_utc() - chrono::Duration::minutes(50);
     match query::pixiv_credential::find_all(&state.db).await {
         Ok(creds) => {
             for cred in creds.iter().filter(|c| c.status == 0) {
+                let needs_refresh = cred
+                    .last_refreshed_at
+                    .map(|t| t < stale_threshold)
+                    .unwrap_or(true);
+                if !needs_refresh {
+                    tracing::info!(
+                        cred_id = cred.id,
+                        "Pixiv token still fresh, skipping refresh"
+                    );
+                    continue;
+                }
                 if let Err(e) = state
                     .job_storage
                     .push_refresh_pixiv_token(RefreshPixivTokenJob {
@@ -124,6 +155,31 @@ async fn main() {
     // --- Apalis workers -------------------------------------------------------
     let worker_handles = randimg_backend_rs::spawn_workers(state.clone(), &apalis_pool).await;
     *state.worker_handles.lock().await = worker_handles;
+
+    // --- Optional: spawn color-worker as child process -----------------------
+    let mut color_worker_child: Option<tokio::process::Child> = if config.color_worker_standalone
+        && std::env::var("COLOR_WORKER_AUTO_SPAWN")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false)
+    {
+        tracing::info!("Spawning color-worker as child process");
+        let exe = std::env::current_exe().expect("Failed to get current exe path");
+        let child = tokio::process::Command::new(exe)
+            .arg("color-worker")
+            .env("DATABASE_URL", &config.database_url)
+            .env("SECRET_KEY", &config.secret_key)
+            .env(
+                "COLOR_WORKER_RAYON_THREADS",
+                config.color_worker_rayon_threads.to_string(),
+            )
+            .env("RUST_LOG", &config.log_level)
+            .spawn()
+            .expect("Failed to spawn color-worker child process");
+        tracing::info!(pid = ?child.id(), "Color-worker child process spawned");
+        Some(child)
+    } else {
+        None
+    };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -176,6 +232,13 @@ async fn main() {
                 .await
                 .unwrap();
         }
+    }
+
+    // Shut down color-worker child process if spawned
+    if let Some(ref mut child) = color_worker_child {
+        tracing::info!("Sending kill signal to color-worker child process");
+        child.kill().await.ok();
+        let _ = child.wait().await;
     }
 
     tracing::info!("Shutting down — aborting Apalis workers…");
