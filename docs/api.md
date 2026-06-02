@@ -356,11 +356,16 @@ Response:
 
 ```
 GET /tasks/{id}/tree
+GET /tasks/{id}/tree?flatten=true
 ```
 
-Returns the full recursive hierarchy of subtasks. Each node contains the job details and a `children` array. Useful for visualizing the crawl→download→extract pipeline.
+Returns the full recursive hierarchy of subtasks.
 
-Response:
+**Default (nested) mode:** Each node contains the job details and a `children` array. Useful for tree UI with expand/collapse.
+
+**Flat mode (`?flatten=true`):** Returns all descendants as a flat `tasks` array. Each item includes `parent_job_id` (direct parent) and `root_job_id` (the root task). Useful for table/list UI with sorting and filtering.
+
+Nested response:
 
 ```json
 {
@@ -374,6 +379,32 @@ Response:
           "children": []
         }
       ]
+    }
+  ]
+}
+```
+
+Flat response (`?flatten=true`):
+
+```json
+{
+  "root_job_id": "01HZ...",
+  "tasks": [
+    {
+      "id": "...",
+      "job_type": "download",
+      "status": "completed",
+      "parent_job_id": "01HZ...",
+      "root_job_id": "01HZ...",
+      ...
+    },
+    {
+      "id": "...",
+      "job_type": "color_extract",
+      "status": "pending",
+      "parent_job_id": "...",
+      "root_job_id": "01HZ...",
+      ...
     }
   ]
 }
