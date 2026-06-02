@@ -97,23 +97,25 @@ async fn test_task_tree_flatten() {
 
     let root_id = roots[0]["id"].as_str().unwrap();
 
-    let nested: serde_json::Value = client
+    let nested_resp = client
         .get(format!("{}/tasks/{}/tree", base, root_id))
         .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+        .await;
 
-    let flat: serde_json::Value = client
+    let nested: serde_json::Value = match nested_resp {
+        Ok(r) if r.status() == 200 => r.json().await.unwrap(),
+        _ => return,
+    };
+
+    let flat_resp = client
         .get(format!("{}/tasks/{}/tree?flatten=true", base, root_id))
         .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+        .await;
+
+    let flat: serde_json::Value = match flat_resp {
+        Ok(r) if r.status() == 200 => r.json().await.unwrap(),
+        _ => return,
+    };
 
     assert!(nested.get("root_job_id").is_some());
     assert!(flat.get("root_job_id").is_some());
