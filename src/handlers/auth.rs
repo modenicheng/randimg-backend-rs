@@ -35,7 +35,7 @@ pub async fn login(
         &admin.username,
         &state.config.secret_key,
         state.config.jwt_expire_minutes,
-    );
+    )?;
 
     Ok(Json(serde_json::json!({
         "access_token": token,

@@ -2,16 +2,18 @@ use chrono::{Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
+use crate::error::AppError;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub exp: usize,
 }
 
-pub fn create_token(username: &str, secret: &str, expire_minutes: u64) -> String {
+pub fn create_token(username: &str, secret: &str, expire_minutes: u64) -> Result<String, AppError> {
     let expiration = Utc::now()
         .checked_add_signed(Duration::minutes(expire_minutes as i64))
-        .unwrap()
+        .ok_or_else(|| AppError::Internal("Invalid timestamp".into()))?
         .timestamp() as usize;
 
     let claims = Claims {
@@ -24,7 +26,7 @@ pub fn create_token(username: &str, secret: &str, expire_minutes: u64) -> String
         &claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
-    .unwrap()
+    .map_err(|e| AppError::Internal(format!("JWT encoding failed: {}", e)))
 }
 
 pub fn verify_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {

@@ -37,7 +37,7 @@ async fn main() {
     io::stdin().read_line(&mut password).unwrap();
     let password = password.trim();
 
-    let hash = auth::password::hash_password(password);
+    let hash = auth::password::hash_password(password).expect("Password hashing failed");
 
     let admin = db::query::admin::create(&db, username, &hash, true)
         .await
