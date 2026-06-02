@@ -27,6 +27,7 @@ fn make_test_config() -> AppConfig {
         server_addr: BindAddr::parse("127.0.0.1:8080"),
         pixiv_refresh_token: "".into(),
         pixiv_proxy: "".into(),
+        pixiv_accept_lang: "en".into(),
         log_level: "info".into(),
         log_dir: "/tmp/logs".into(),
         log_json: false,
@@ -40,6 +41,8 @@ fn make_test_config() -> AppConfig {
         dogecloud_secret_key: "".into(),
         dogecloud_s3_bucket: "".into(),
         dogecloud_s3_endpoint: "".into(),
+        color_worker_rayon_threads: 2,
+        color_worker_standalone: false,
     }
 }
 
@@ -69,6 +72,7 @@ async fn build_test_router(db: DatabaseConnection, config: AppConfig) -> axum::R
         oss: randimg_backend_rs::dogecloud::DogeCloudOss::new_noop(),
         job_storage,
         apalis_pool,
+        http_client: reqwest::Client::new(),
         worker_handles: Arc::new(tokio::sync::Mutex::new(Vec::new())),
     });
 

@@ -445,6 +445,7 @@ fn make_test_config() -> randimg_backend_rs::config::AppConfig {
         server_addr: randimg_backend_rs::config::BindAddr::parse("127.0.0.1:8080"),
         pixiv_refresh_token: "".into(),
         pixiv_proxy: "".into(),
+        pixiv_accept_lang: "en".into(),
         log_level: "info".into(),
         log_dir: "/tmp/logs".into(),
         log_json: false,
@@ -458,6 +459,8 @@ fn make_test_config() -> randimg_backend_rs::config::AppConfig {
         dogecloud_secret_key: "".into(),
         dogecloud_s3_bucket: "".into(),
         dogecloud_s3_endpoint: "".into(),
+        color_worker_rayon_threads: 2,
+        color_worker_standalone: false,
     }
 }
 
