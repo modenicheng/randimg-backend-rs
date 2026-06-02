@@ -556,33 +556,37 @@ pub async fn handle_download(
         }
     }
 
-    // 3. Perform the actual download
-    let resp = state
-        .http_client
-        .get(&job.source_image_url)
-        .header("Referer", "https://app-api.pixiv.net/")
-        .send()
-        .await
-        .map_err(|e| format!("Download failed: {}", e))?;
+    // 3. Perform the actual download using crate's built-in downloader.
+    //    DownloadManager auto-configures headers (Referer) and handles file I/O.
+    //    Retries are managed by Apalis (RetryPolicy), not the downloader.
+    {
+        use std::path::Path;
+        let img_path = Path::new(&job.image_path);
+        let parent = img_path.parent().unwrap_or(Path::new(""));
+        let filename = img_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("Invalid image_path: {}", job.image_path))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Download failed with status: {}", resp.status()).into());
-    }
+        // The crate only creates the base output_dir; ensure subdirectories exist.
+        let output_dir = if parent.as_os_str().is_empty() {
+            Path::new(&state.config.image_dir).to_path_buf()
+        } else {
+            let dir = Path::new(&state.config.image_dir).join(parent);
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+            dir
+        };
 
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
-
-    if let Some(parent) = std::path::Path::new(&file_path).parent() {
-        tokio::fs::create_dir_all(parent)
+        let dm = crate::pixiv::downloader::DownloadManager::new(
+            state.http_client.clone(),
+            &output_dir,
+        );
+        dm.download(&job.source_image_url, filename)
             .await
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
+            .map_err(|e| format!("Download failed: {}", e))?;
     }
-
-    tokio::fs::write(&file_path, &bytes)
-        .await
-        .map_err(|e| format!("Failed to write file: {}", e))?;
 
     tracing::info!("Downloaded image {} to {}", job.image_id, file_path);
 
