@@ -180,7 +180,7 @@ async fn clean_tasks(
 
     // Re-spawn workers if they were aborted — MUST happen regardless of delete outcome
     if should_abort_workers {
-        let new_handles = crate::spawn_workers(state.clone(), &state.apalis_pool).await;
+        let new_handles = crate::spawn_workers(state.clone(), &state.apalis_pool, state.worker_runtime_handle.clone()).await;
         *state.worker_handles.lock().await = new_handles;
         tracing::info!("Re-spawned Apalis workers after cleanup");
     }
@@ -613,10 +613,16 @@ pub async fn list_roots(
 ///   ]
 /// }
 /// ```
+#[derive(Debug, Deserialize)]
+pub struct TaskTreeQuery {
+    pub flatten: Option<bool>,
+}
+
 pub async fn get_task_tree(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
     Path(task_id): Path<String>,
+    Query(_q): Query<TaskTreeQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let tree = query::task_tree::list_children(
         &state.db,
