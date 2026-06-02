@@ -1,4 +1,5 @@
 use axum::Router;
+use axum::http::HeaderValue;
 use randimg_backend_rs::config::{AppConfig, BindAddr};
 use randimg_backend_rs::task_queue::jobs::*;
 use randimg_backend_rs::{AppState, db, db::query, db_backend, handlers};
@@ -181,10 +182,23 @@ async fn main() {
         None
     };
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = if state.config.cors_origins == "*" {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    } else {
+        let origins: Vec<HeaderValue> = state
+            .config
+            .cors_origins
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    };
 
     let app = Router::new()
         .merge(handlers::health::routes())

@@ -41,6 +41,44 @@ type Storage<T> = apalis_sqlite::SqliteStorage<
 #[cfg(feature = "postgres")]
 type Storage<T> = apalis_postgres::PostgresStorage<T>;
 
+/// Generates a `push_{TYPE}_with_parent` method on [`JobStorage`].
+///
+/// Each generated method pre-generates a ULID for the child task, pushes it
+/// via `push_task`, then records the parent-child relationship in
+/// `task_dependencies`.
+macro_rules! push_with_parent {
+    ($(#[$meta:meta])* $method:ident, $job_type:ty, $field:ident) => {
+        $(#[$meta])*
+        pub async fn $method(
+            &self,
+            job: $job_type,
+            db: &DatabaseConnection,
+        ) -> Result<String, String> {
+            let child_id = Ulid::new();
+            let parent_id = job.parent_job_id.clone();
+
+            let task = TaskBuilder::new(job)
+                .with_task_id(TaskId::new(child_id))
+                .build();
+
+            self.$field
+                .lock()
+                .await
+                .push_task(task)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if let Some(pid) = parent_id {
+                query::task_dependency::record(db, &pid, &child_id.to_string())
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+
+            Ok(child_id.to_string())
+        }
+    };
+}
+
 // ---------------------------------------------------------------------------
 // JobStorage
 // ---------------------------------------------------------------------------
@@ -143,152 +181,32 @@ impl JobStorage {
     // the child job starts executing, fixing the bug where pending children
     // appeared as root tasks in `GET /tasks/roots`.
 
-    /// Push a download job and record its parent-child relationship.
-    ///
-    /// Returns the child job's ULID string.
-    pub async fn push_download_with_parent(
-        &self,
-        job: DownloadJob,
-        db: &DatabaseConnection,
-    ) -> Result<String, String> {
-        let child_id = Ulid::new();
-        let parent_id = job.parent_job_id.clone();
+    push_with_parent!(
+        /// Push a download job and record its parent-child relationship.
+        ///
+        /// Returns the child job's ULID string.
+        push_download_with_parent, DownloadJob, download
+    );
 
-        let task = TaskBuilder::new(job)
-            .with_task_id(TaskId::new(child_id))
-            .build();
+    push_with_parent!(
+        /// Push a color_extract job and record its parent-child relationship.
+        push_color_extract_with_parent, ColorExtractJob, color_extract
+    );
 
-        self.download
-            .lock()
-            .await
-            .push_task(task)
-            .await
-            .map_err(|e| e.to_string())?;
+    push_with_parent!(
+        /// Push an upload job and record its parent-child relationship.
+        push_upload_with_parent, UploadJob, upload
+    );
 
-        if let Some(pid) = parent_id {
-            query::task_dependency::record(db, &pid, &child_id.to_string())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
+    push_with_parent!(
+        /// Push an accessibility_check job and record its parent-child relationship.
+        push_accessibility_check_with_parent, AccessibilityCheckJob, accessibility_check
+    );
 
-        Ok(child_id.to_string())
-    }
-
-    /// Push a color_extract job and record its parent-child relationship.
-    pub async fn push_color_extract_with_parent(
-        &self,
-        job: ColorExtractJob,
-        db: &DatabaseConnection,
-    ) -> Result<String, String> {
-        let child_id = Ulid::new();
-        let parent_id = job.parent_job_id.clone();
-
-        let task = TaskBuilder::new(job)
-            .with_task_id(TaskId::new(child_id))
-            .build();
-
-        self.color_extract
-            .lock()
-            .await
-            .push_task(task)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if let Some(pid) = parent_id {
-            query::task_dependency::record(db, &pid, &child_id.to_string())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-
-        Ok(child_id.to_string())
-    }
-
-    /// Push an upload job and record its parent-child relationship.
-    pub async fn push_upload_with_parent(
-        &self,
-        job: UploadJob,
-        db: &DatabaseConnection,
-    ) -> Result<String, String> {
-        let child_id = Ulid::new();
-        let parent_id = job.parent_job_id.clone();
-
-        let task = TaskBuilder::new(job)
-            .with_task_id(TaskId::new(child_id))
-            .build();
-
-        self.upload
-            .lock()
-            .await
-            .push_task(task)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if let Some(pid) = parent_id {
-            query::task_dependency::record(db, &pid, &child_id.to_string())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-
-        Ok(child_id.to_string())
-    }
-
-    /// Push an accessibility_check job and record its parent-child relationship.
-    pub async fn push_accessibility_check_with_parent(
-        &self,
-        job: AccessibilityCheckJob,
-        db: &DatabaseConnection,
-    ) -> Result<String, String> {
-        let child_id = Ulid::new();
-        let parent_id = job.parent_job_id.clone();
-
-        let task = TaskBuilder::new(job)
-            .with_task_id(TaskId::new(child_id))
-            .build();
-
-        self.accessibility_check
-            .lock()
-            .await
-            .push_task(task)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if let Some(pid) = parent_id {
-            query::task_dependency::record(db, &pid, &child_id.to_string())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-
-        Ok(child_id.to_string())
-    }
-
-    /// Push a discover job and record its parent-child relationship.
-    pub async fn push_discover_with_parent(
-        &self,
-        job: DiscoverJob,
-        db: &DatabaseConnection,
-    ) -> Result<String, String> {
-        let child_id = Ulid::new();
-        let parent_id = job.parent_job_id.clone();
-
-        let task = TaskBuilder::new(job)
-            .with_task_id(TaskId::new(child_id))
-            .build();
-
-        self.discover
-            .lock()
-            .await
-            .push_task(task)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if let Some(pid) = parent_id {
-            query::task_dependency::record(db, &pid, &child_id.to_string())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-
-        Ok(child_id.to_string())
-    }
+    push_with_parent!(
+        /// Push a discover job and record its parent-child relationship.
+        push_discover_with_parent, DiscoverJob, discover
+    );
 }
 
 // ---------------------------------------------------------------------------

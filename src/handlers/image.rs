@@ -76,8 +76,9 @@ async fn serve_local_image(state: &AppState, image_path: &str) -> Result<Respons
     let bytes = tokio::fs::read(&full)
         .await
         .map_err(|_| AppError::NotFound("Image file not found".into()))?;
+    let mime = mime_guess::from_path(&full).first_or_octet_stream();
     Ok(axum::response::Response::builder()
-        .header("Content-Type", "image/jpeg")
+        .header("Content-Type", mime.as_ref())
         .body(axum::body::Body::from(bytes))
         .unwrap())
 }
@@ -90,12 +91,12 @@ async fn format_image_response(
     local: bool,
 ) -> Result<Response, AppError> {
     if local {
-        let path = img["image_path"].as_str().unwrap();
+        let path = img["image_path"].as_str().ok_or_else(|| AppError::Internal("Missing image_path".into()))?;
         return serve_local_image(state, path).await;
     }
 
     if format == "image" {
-        let src = img["src"].as_str().unwrap();
+        let src = img["src"].as_str().ok_or_else(|| AppError::Internal("Missing src".into()))?;
         Ok(Redirect::temporary(src).into_response())
     } else {
         Ok(Json(img).into_response())
@@ -360,7 +361,17 @@ pub async fn delete_image(
 
     // Best-effort remove physical file from disk
     let file_path = format!("{}/{}", state.config.image_dir, img.image_path);
-    match tokio::fs::remove_file(&file_path).await {
+
+    // Path traversal guard: canonicalize and verify prefix
+    let base = std::fs::canonicalize(&state.config.image_dir)
+        .map_err(|_| AppError::Internal("Invalid image directory".into()))?;
+    let full = std::fs::canonicalize(&file_path)
+        .map_err(|_| AppError::NotFound("Image file not found".into()))?;
+    if !full.starts_with(&base) {
+        return Err(AppError::BadRequest("Invalid image path".into()));
+    }
+
+    match tokio::fs::remove_file(&full).await {
         Ok(_) => {
             tracing::info!("Deleted image file: {}", file_path);
         }

@@ -70,6 +70,8 @@ pub struct AppConfig {
     // Color worker process isolation
     pub color_worker_rayon_threads: usize,
     pub color_worker_standalone: bool,
+    // CORS
+    pub cors_origins: String,
 }
 
 impl AppConfig {
@@ -158,6 +160,7 @@ impl AppConfig {
             color_worker_standalone: env::var("COLOR_WORKER_STANDALONE")
                 .map(|v| v == "1" || v == "true")
                 .unwrap_or(false),
+            cors_origins: env::var("CORS_ORIGINS").unwrap_or_else(|_| "*".into()),
         }
     }
 }
