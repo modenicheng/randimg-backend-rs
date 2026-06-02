@@ -76,8 +76,9 @@ async fn serve_local_image(state: &AppState, image_path: &str) -> Result<Respons
     let bytes = tokio::fs::read(&full)
         .await
         .map_err(|_| AppError::NotFound("Image file not found".into()))?;
+    let mime = mime_guess::from_path(&full).first_or_octet_stream();
     Ok(axum::response::Response::builder()
-        .header("Content-Type", "image/jpeg")
+        .header("Content-Type", mime.as_ref())
         .body(axum::body::Body::from(bytes))
         .unwrap())
 }
