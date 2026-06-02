@@ -15,6 +15,12 @@ pub struct CrawlJob {
     /// User illust type: "illust", "manga" (default: "illust").
     #[serde(default)]
     pub illust_type: Option<String>,
+    /// Exclude R18 content (x_restrict > 0). Default: false.
+    #[serde(default)]
+    pub exclude_r18: Option<bool>,
+    /// Exclude AI-generated content (illust_ai_type > 0). Default: false.
+    #[serde(default)]
+    pub exclude_ai: Option<bool>,
     /// Maximum total pages to crawl (0 or None = unlimited).
     #[serde(default)]
     pub max_pages: Option<u32>,

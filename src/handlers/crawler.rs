@@ -90,6 +90,8 @@ pub async fn create_crawler(
             target_search_prompt: body.target_search_prompt,
             ranking_mode: body.ranking_mode,
             illust_type: body.illust_type,
+            exclude_r18: None,
+            exclude_ai: None,
             max_pages: body.max_pages,
             discover_hops: body.discover_hops,
             discover_seed_limit: body.discover_seed_limit,
