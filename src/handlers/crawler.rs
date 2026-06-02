@@ -36,6 +36,10 @@ pub struct CreateCrawlerRequest {
     pub ranking_mode: Option<String>,
     /// User illust type (crawl_type=1): "illust", "manga". Default: "illust".
     pub illust_type: Option<String>,
+    /// Exclude R18 content (x_restrict > 0). Default: false.
+    pub exclude_r18: Option<bool>,
+    /// Exclude AI-generated content (illust_ai_type > 0). Default: false.
+    pub exclude_ai: Option<bool>,
     /// Maximum total pages to crawl per run (0 = unlimited). Default: unlimited.
     pub max_pages: Option<u32>,
     /// Max discover hops after crawl finishes (overrides global default). Default: use global.
@@ -90,8 +94,8 @@ pub async fn create_crawler(
             target_search_prompt: body.target_search_prompt,
             ranking_mode: body.ranking_mode,
             illust_type: body.illust_type,
-            exclude_r18: None,
-            exclude_ai: None,
+            exclude_r18: body.exclude_r18,
+            exclude_ai: body.exclude_ai,
             max_pages: body.max_pages,
             discover_hops: body.discover_hops,
             discover_seed_limit: body.discover_seed_limit,
