@@ -121,7 +121,7 @@ async fn crawl_ranking(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust).await?;
+            let downloads = save_illust(state, illust, job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
                 storage
                     .push_download_with_parent(DownloadJob {
@@ -194,7 +194,7 @@ async fn crawl_user(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust).await?;
+            let downloads = save_illust(state, illust, job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
                 storage
                     .push_download_with_parent(DownloadJob {
@@ -265,7 +265,7 @@ async fn crawl_bookmarks(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust).await?;
+            let downloads = save_illust(state, illust, job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
                 storage
                     .push_download_with_parent(DownloadJob {
@@ -311,7 +311,25 @@ struct DownloadInfo {
 async fn save_illust(
     state: &AppState,
     illust: &crate::pixiv::Illust,
+    exclude_r18: Option<bool>,
+    exclude_ai: Option<bool>,
 ) -> Result<Vec<DownloadInfo>, String> {
+    // Filter out R18 content if requested
+    if exclude_r18.unwrap_or(false) {
+        if illust.x_restrict.unwrap_or(0) > 0 {
+            tracing::debug!("Skipping R18 illust {} (x_restrict={})", illust.id, illust.x_restrict.unwrap_or(0));
+            return Ok(Vec::new());
+        }
+    }
+
+    // Filter out AI-generated content if requested
+    if exclude_ai.unwrap_or(false) {
+        if illust.illust_ai_type.unwrap_or(0) > 0 {
+            tracing::debug!("Skipping AI illust {} (illust_ai_type={})", illust.id, illust.illust_ai_type.unwrap_or(0));
+            return Ok(Vec::new());
+        }
+    }
+
     let db = &state.db;
     let mut downloads = Vec::new();
 
@@ -381,6 +399,9 @@ async fn save_illust(
             "total_view": illust.total_view.unwrap_or(0),
             "total_bookmarks": illust.total_bookmarks.unwrap_or(0),
             "total_comments": illust.total_comments.unwrap_or(0),
+            "illust_type": illust.r#type.as_ref().map(|t| format!("{:?}", t).to_lowercase()),
+            "x_restrict": illust.x_restrict.unwrap_or(0),
+            "illust_ai_type": illust.illust_ai_type.unwrap_or(0),
         });
 
         let image = query::image::create_image(db, &image_data)
@@ -488,36 +509,33 @@ async fn spawn_downstream_children(
 ) {
     let upstream_id = job.root_job_id.as_deref().unwrap_or(current_id);
 
-    if let Err(e) = storage
-        .push_color_extract_with_parent(ColorExtractJob {
-            image_id: job.image_id,
-            image_path: job.image_path.clone(),
-            parent_job_id: Some(upstream_id.to_string()),
-        }, db)
-        .await
-    {
+    let color_fut = storage.push_color_extract_with_parent(ColorExtractJob {
+        image_id: job.image_id,
+        image_path: job.image_path.clone(),
+        parent_job_id: Some(upstream_id.to_string()),
+    }, db);
+
+    let upload_fut = storage.push_upload_with_parent(UploadJob {
+        image_id: job.image_id,
+        image_path: job.image_path.clone(),
+        parent_job_id: Some(upstream_id.to_string()),
+    }, db);
+
+    let a11y_fut = storage.push_accessibility_check_with_parent(AccessibilityCheckJob {
+        image_id: job.image_id,
+        image_path: job.image_path.clone(),
+        parent_job_id: Some(upstream_id.to_string()),
+    }, db);
+
+    let (color_res, upload_res, a11y_res) = tokio::join!(color_fut, upload_fut, a11y_fut);
+
+    if let Err(e) = color_res {
         tracing::error!(image_id = job.image_id, "Failed to submit color_extract task: {}", e);
     }
-
-    if let Err(e) = storage
-        .push_upload_with_parent(UploadJob {
-            image_id: job.image_id,
-            image_path: job.image_path.clone(),
-            parent_job_id: Some(upstream_id.to_string()),
-        }, db)
-        .await
-    {
+    if let Err(e) = upload_res {
         tracing::error!(image_id = job.image_id, "Failed to submit upload task: {}", e);
     }
-
-    if let Err(e) = storage
-        .push_accessibility_check_with_parent(AccessibilityCheckJob {
-            image_id: job.image_id,
-            image_path: job.image_path.clone(),
-            parent_job_id: Some(upstream_id.to_string()),
-        }, db)
-        .await
-    {
+    if let Err(e) = a11y_res {
         tracing::error!(image_id = job.image_id, "Failed to submit accessibility_check task: {}", e);
     }
 }
@@ -798,7 +816,7 @@ pub async fn handle_discover(
         let data = resp.data.ok_or("No data in illust_related response")?;
 
         for illust in &data.illusts {
-            let downloads = save_illust(&state, illust).await?;
+            let downloads = save_illust(&state, illust, None, None).await?;
             for dl in downloads {
                 storage
                     .push_download_with_parent(DownloadJob {
@@ -867,6 +885,7 @@ pub async fn handle_refresh_pixiv_token(
 
     let new_refresh_token = api.current_refresh_token().await;
     let new_access_token = api.access_token().await;
+    let new_user_id = api.user_id().await;
 
     let refresh_to_save = new_refresh_token.as_deref().unwrap_or(&cred.refresh_token);
     query::pixiv_credential::update_token(
@@ -874,6 +893,7 @@ pub async fn handle_refresh_pixiv_token(
         credential_id,
         refresh_to_save,
         new_access_token.as_deref(),
+        new_user_id,
     )
     .await
     .map_err(|e| format!("Failed to update token: {}", e))?;
