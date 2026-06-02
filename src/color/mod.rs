@@ -4,6 +4,47 @@ use image::{DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Dedicated rayon thread pool for color extraction.
+/// Initialized once with the configured number of threads.
+static COLOR_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+
+/// Initialize (or return existing) dedicated color extraction thread pool.
+///
+/// `threads`: number of threads in the pool. Panics if called with different
+/// values after initialization (OnceLock semantics).
+pub fn init_color_pool(threads: usize) -> &'static rayon::ThreadPool {
+    COLOR_POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|idx| format!("color-worker-{}", idx))
+            .build()
+            .expect("Failed to create color extraction rayon pool")
+    })
+}
+
+/// Run a closure on the dedicated color extraction thread pool.
+///
+/// This ensures color extraction work runs on isolated threads that don't
+/// compete with tokio's async worker threads or the global rayon pool.
+pub fn run_on_color_pool<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R + Send,
+    R: Send,
+{
+    let pool = init_color_pool(
+        std::env::var("COLOR_WORKER_RAYON_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            }),
+    );
+    pool.install(f)
+}
 
 #[derive(Serialize)]
 pub struct ColorEntry {
@@ -170,55 +211,61 @@ fn lab_to_rgb(l: f64, a: f64, b: f64) -> [u8; 3] {
 /// Extract theme colors from an image
 /// Primary color: histogram mode (most frequent quantized color)
 /// Color palette: KMeans in CIELAB space, sorted by L*
+///
+/// All CPU-heavy work (image resize, LAB conversion, KMeans) runs on a
+/// dedicated rayon thread pool so it doesn't compete with tokio's async
+/// executor or the global rayon pool.
 pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
-    // Scale down to reduce computation
-    let scale = 0.5;
-    let (w, h) = img.dimensions();
-    let new_w = ((w as f64 * scale) as u32).max(1);
-    let new_h = ((h as f64 * scale) as u32).max(1);
-    let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
-    let rgb = small.to_rgb8();
+    run_on_color_pool(|| {
+        // Scale down to reduce computation
+        let scale = 0.5;
+        let (w, h) = img.dimensions();
+        let new_w = ((w as f64 * scale) as u32).max(1);
+        let new_h = ((h as f64 * scale) as u32).max(1);
+        let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
+        let rgb = small.to_rgb8();
 
-    // Collect pixels as [u8; 3]
-    let pixels: Vec<[u8; 3]> = rgb.pixels().map(|p| [p[0], p[1], p[2]]).collect();
+        // Collect pixels as [u8; 3]
+        let pixels: Vec<[u8; 3]> = rgb.pixels().map(|p| [p[0], p[1], p[2]]).collect();
 
-    if pixels.is_empty() {
-        return ThemeColors {
-            primary_color: [0, 0, 0],
-            primary_lab: [0.0; 3],
-            colors: vec![[0, 0, 0]; 10],
-            colors_lab: vec![[0.0; 3]; 10],
-        };
-    }
+        if pixels.is_empty() {
+            return ThemeColors {
+                primary_color: [0, 0, 0],
+                primary_lab: [0.0; 3],
+                colors: vec![[0, 0, 0]; 10],
+                colors_lab: vec![[0.0; 3]; 10],
+            };
+        }
 
-    // Primary color from histogram (16 levels per channel)
-    let primary_color = histogram_primary_color(&pixels, 16);
-    let primary_lab = rgb_to_lab(primary_color[0], primary_color[1], primary_color[2]);
+        // Primary color from histogram (16 levels per channel)
+        let primary_color = histogram_primary_color(&pixels, 16);
+        let primary_lab = rgb_to_lab(primary_color[0], primary_color[1], primary_color[2]);
 
-    // Convert to LAB for clustering (parallel)
-    let lab_pixels: Vec<[f64; 3]> = pixels
-        .par_iter()
-        .map(|p| rgb_to_lab(p[0], p[1], p[2]))
-        .collect();
+        // Convert to LAB for clustering (parallel on dedicated pool)
+        let lab_pixels: Vec<[f64; 3]> = pixels
+            .par_iter()
+            .map(|p| rgb_to_lab(p[0], p[1], p[2]))
+            .collect();
 
-    // KMeans clustering in LAB space
-    let lab_centroids = kmeans::kmeans(&lab_pixels, 10, 50, Some(2048));
+        // KMeans clustering in LAB space
+        let lab_centroids = kmeans::kmeans(&lab_pixels, 10, 50, Some(2048));
 
-    // Sort by L* (lightness)
-    let mut sorted_lab = lab_centroids;
-    sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
+        // Sort by L* (lightness)
+        let mut sorted_lab = lab_centroids;
+        sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Keep LAB centroids for storage, also convert to RGB
-    let colors_lab: Vec<[f64; 3]> = sorted_lab.clone();
-    let colors: Vec<[u8; 3]> = sorted_lab
-        .into_iter()
-        .map(|c| lab_to_rgb(c[0], c[1], c[2]))
-        .collect();
+        // Keep LAB centroids for storage, also convert to RGB
+        let colors_lab: Vec<[f64; 3]> = sorted_lab.clone();
+        let colors: Vec<[u8; 3]> = sorted_lab
+            .into_iter()
+            .map(|c| lab_to_rgb(c[0], c[1], c[2]))
+            .collect();
 
-    ThemeColors {
-        primary_color,
-        primary_lab,
-        colors,
-        colors_lab,
-    }
+        ThemeColors {
+            primary_color,
+            primary_lab,
+            colors,
+            colors_lab,
+        }
+    })
 }
