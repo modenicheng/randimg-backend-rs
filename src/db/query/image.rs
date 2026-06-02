@@ -574,6 +574,9 @@ pub async fn create_image(
         total_view: Set(data["total_view"].as_i64().unwrap_or(0)),
         total_bookmarks: Set(data["total_bookmarks"].as_i64().unwrap_or(0)),
         total_comments: Set(data["total_comments"].as_i64().unwrap_or(0)),
+        illust_type: Set(data["illust_type"].as_str().map(|s| s.to_string())),
+        x_restrict: Set(data["x_restrict"].as_i64().unwrap_or(0) as i32),
+        illust_ai_type: Set(data["illust_ai_type"].as_i64().unwrap_or(0) as i32),
         ..Default::default()
     };
     model.insert(db).await
