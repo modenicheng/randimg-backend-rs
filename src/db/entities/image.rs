@@ -35,6 +35,11 @@ pub struct Model {
     pub fetched_times: i32,
     pub created_at: NaiveDateTime,
     pub deleted_at: Option<NaiveDateTime>,
+    pub illust_type: Option<String>,
+    #[sea_orm(default_value = 0)]
+    pub x_restrict: i32,
+    #[sea_orm(default_value = 0)]
+    pub illust_ai_type: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
