@@ -650,6 +650,8 @@ fn flatten_tree(nodes: &[ChildJobNode], parent_id: &str, root_id: &str) -> Vec<s
 #[derive(Debug, Deserialize)]
 pub struct TaskTreeQuery {
     pub flatten: Option<bool>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
 }
 
 /// GET /tasks/:id/tree
@@ -665,6 +667,12 @@ pub struct TaskTreeQuery {
 ///   - When `true`: Returns flat list in `tasks` array. Each item includes
 ///     `parent_job_id` (direct parent) and `root_job_id` (the URL path root).
 ///     Frontend uses this for table/list UI with sorting and filtering.
+///
+/// - `limit` (optional): Maximum number of tasks to return in flattened mode.
+///   Defaults to all tasks if not specified.
+///
+/// - `offset` (optional): Number of tasks to skip in flattened mode.
+///   Defaults to 0 if not specified.
 ///
 /// # Design Decision: Why flatten?
 ///
@@ -703,16 +711,27 @@ pub async fn get_task_tree(
     if q.flatten.unwrap_or(false) {
         // FLATTENED MODE: Return all descendants as a flat array.
         // Each item has parent_job_id and root_job_id for hierarchy reconstruction.
-        // Response shape: { "root_job_id": "...", "tasks": [...] }
+        // Response shape: { "root_job_id": "...", "tasks": [...], "total": N }
         //
         // This differs from the default nested mode which returns:
         // { "root_job_id": "...", "children": [{ job, children }] }
         //
         // The different shapes are intentional — NOT a bug. See function doc.
-        let tasks = flatten_tree(&tree, &task_id, &task_id);
+        let all_tasks = flatten_tree(&tree, &task_id, &task_id);
+        let total = all_tasks.len() as u64;
+
+        let offset = q.offset.unwrap_or(0) as usize;
+        let limit = q.limit.unwrap_or(total) as usize;
+        let tasks: Vec<_> = all_tasks
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect();
+
         Ok(Json(serde_json::json!({
             "root_job_id": task_id,
             "tasks": tasks,
+            "total": total,
         })))
     } else {
         // NESTED MODE: Return tree structure with children arrays.
