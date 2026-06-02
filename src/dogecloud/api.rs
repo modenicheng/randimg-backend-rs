@@ -20,6 +20,7 @@ const DOGECLOUD_API_BASE: &str = "https://api.dogecloud.com";
 /// - 签名 = HMAC-SHA1(secret_key, api_path + "\n" + body)
 /// - Authorization: TOKEN {access_key}:{sign_hex}
 async fn dogecloud_api(
+    client: &Client,
     keys: &DogeCloudKeys,
     api_path: &str,
     data: Option<&HashMap<String, String>>,
@@ -45,7 +46,6 @@ async fn dogecloud_api(
     let authorization = format!("TOKEN {}:{}", keys.access_key, sign);
 
     let url = format!("{}{}", DOGECLOUD_API_BASE, api_path);
-    let client = Client::new();
     let resp = client
         .post(&url)
         .header("Authorization", authorization)
@@ -68,12 +68,15 @@ async fn dogecloud_api(
 /// 对应原 Python `get_tmp_token()`：
 /// POST /auth/tmp_token.json
 ///   channel=OSS_FULL, scopes=["*"]
-pub async fn get_tmp_token(keys: &DogeCloudKeys) -> Result<(TempCredentials, BucketInfo)> {
+pub async fn get_tmp_token(
+    client: &Client,
+    keys: &DogeCloudKeys,
+) -> Result<(TempCredentials, BucketInfo)> {
     let mut data = HashMap::new();
     data.insert("channel".to_string(), "OSS_FULL".to_string());
     data.insert("scopes".to_string(), "*".to_string());
 
-    let resp = dogecloud_api(keys, "/auth/tmp_token.json", Some(&data), true).await?;
+    let resp = dogecloud_api(client, keys, "/auth/tmp_token.json", Some(&data), true).await?;
 
     let code = resp["code"].as_i64().unwrap_or(0);
     if code != 200 {

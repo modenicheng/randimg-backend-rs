@@ -27,6 +27,8 @@ pub struct DogeCloudOss {
     /// 配置中的 fallback CDN 参数
     fallback_bucket: String,
     fallback_endpoint: String,
+    /// Shared HTTP client for DogeCloud API calls
+    http_client: reqwest::Client,
 }
 
 struct OssInner {
@@ -38,7 +40,7 @@ impl DogeCloudOss {
     /// 创建新的 OSS 客户端实例。
     ///
     /// 不会立即获取凭证，首次使用时才会拉取。
-    pub fn new(config: &crate::config::AppConfig) -> Self {
+    pub fn new(config: &crate::config::AppConfig, http_client: reqwest::Client) -> Self {
         Self {
             keys: DogeCloudKeys {
                 access_key: config.dogecloud_access_key.clone(),
@@ -48,6 +50,7 @@ impl DogeCloudOss {
             inner: Arc::new(RwLock::new(None)),
             fallback_bucket: config.dogecloud_s3_bucket.clone(),
             fallback_endpoint: config.dogecloud_s3_endpoint.clone(),
+            http_client,
         }
     }
 
@@ -63,6 +66,7 @@ impl DogeCloudOss {
             inner: Arc::new(RwLock::new(None)),
             fallback_bucket: String::new(),
             fallback_endpoint: String::new(),
+            http_client: reqwest::Client::new(),
         }
     }
 
@@ -93,7 +97,7 @@ impl DogeCloudOss {
         }
 
         // 获取新凭证
-        let (new_creds, mut new_bucket) = api::get_tmp_token(&self.keys).await?;
+        let (new_creds, mut new_bucket) = api::get_tmp_token(&self.http_client, &self.keys).await?;
 
         // API 返回的值为准；仅当 API 未返回时使用配置中的 fallback
         if new_bucket.s3_bucket.is_empty() && !self.fallback_bucket.is_empty() {

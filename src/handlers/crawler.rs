@@ -32,6 +32,18 @@ pub struct CreateCrawlerRequest {
     pub target_start_date: Option<chrono::NaiveDateTime>,
     pub target_end_date: Option<chrono::NaiveDateTime>,
     pub target_search_prompt: Option<String>,
+    /// Ranking mode (crawl_type=0): "day", "week", "month", "original", "rookie". Default: "day".
+    pub ranking_mode: Option<String>,
+    /// User illust type (crawl_type=1): "illust", "manga". Default: "illust".
+    pub illust_type: Option<String>,
+    /// Maximum total pages to crawl per run (0 = unlimited). Default: unlimited.
+    pub max_pages: Option<u32>,
+    /// Max discover hops after crawl finishes (overrides global default). Default: use global.
+    pub discover_hops: Option<u32>,
+    /// Max seed images for discover (overrides global default). Default: use global.
+    pub discover_seed_limit: Option<u64>,
+    /// Seed selection method for discover: "popularity", "views", "bookmarks", "random". Default: "popularity".
+    pub discover_seed_method: Option<String>,
 }
 
 /// POST /crawler  Create crawler task
@@ -76,6 +88,12 @@ pub async fn create_crawler(
             target_start_date: body.target_start_date.map(|d| d.to_string()),
             target_end_date: body.target_end_date.map(|d| d.to_string()),
             target_search_prompt: body.target_search_prompt,
+            ranking_mode: body.ranking_mode,
+            illust_type: body.illust_type,
+            max_pages: body.max_pages,
+            discover_hops: body.discover_hops,
+            discover_seed_limit: body.discover_seed_limit,
+            discover_seed_method: body.discover_seed_method,
             parent_job_id: None,
         })
         .await

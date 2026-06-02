@@ -68,8 +68,30 @@ GET /image/{id}
 ### Paginated Image List
 
 ```
-GET /list?page=1&per_page=20
+GET /list?offset=0&limit=40&accessible=true&desc=true&tags=nature&author=pixiv_user
 ```
+
+| Param        | Type   | Default | Description |
+|--------------|--------|---------|-------------|
+| `offset`     | int    | 0       | Pagination offset |
+| `limit`      | int    | 30      | Page size (max 300) |
+| `desc`       | bool   | true    | Sort descending |
+| `sort_by`    | string | `id`    | Sort field: `id`, `width`, `height`, `aspect_ratio`, `source_created_at`, `created_at`, `popularity` |
+| `ratio_floor`| float  | 0       | Minimum aspect ratio |
+| `ratio_ceil` | float  | 10      | Maximum aspect ratio |
+| `author`     | string | —       | Filter by author name |
+| `tags`       | string | —       | Comma-separated tag filter |
+| `accessible` | string | —       | **See note below** |
+
+**`accessible` field semantics:**
+
+- `accessible` is a boolean field on the `image` table controlling **non-admin user visibility**.
+- **Non-admin users**: The API always filters `accessible != false`. Images with `accessible = false` are excluded. Non-admin users never see inaccessible images regardless of the query parameter.
+- **Admin users** (authenticated with valid token): All images are returned by default (no accessible filter applied). The `accessible` query parameter allows admin to narrow results:
+  - `?accessible=true` — only images where `accessible = true`
+  - `?accessible=false` — only images where `accessible = false`
+  - Parameter omitted or unrecognized value — all images (no filter)
+- In summary: `accessible` controls **non-admin visibility**, not admin visibility. Admin sees everything by default.
 
 ### Color Search
 

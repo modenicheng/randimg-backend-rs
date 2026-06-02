@@ -9,6 +9,24 @@ pub struct CrawlJob {
     pub target_start_date: Option<String>,
     pub target_end_date: Option<String>,
     pub target_search_prompt: Option<String>,
+    /// Ranking mode: "day", "week", "month", "original", "rookie", "daily_r18", "weekly_r18" (default: "day").
+    #[serde(default)]
+    pub ranking_mode: Option<String>,
+    /// User illust type: "illust", "manga" (default: "illust").
+    #[serde(default)]
+    pub illust_type: Option<String>,
+    /// Maximum total pages to crawl (0 or None = unlimited).
+    #[serde(default)]
+    pub max_pages: Option<u32>,
+    /// Max discover hops to run after crawl (override global default).
+    #[serde(default)]
+    pub discover_hops: Option<u32>,
+    /// Max seed limit for discover (override global default).
+    #[serde(default)]
+    pub discover_seed_limit: Option<u64>,
+    /// Seed selection method for discover: "popularity", "views", "bookmarks", "random".
+    #[serde(default)]
+    pub discover_seed_method: Option<String>,
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,

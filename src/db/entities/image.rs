@@ -24,6 +24,7 @@ pub struct Model {
     pub accessible: Option<bool>,
     pub avatar_available: Option<bool>,
     pub is_public: bool,
+    pub downloaded: bool,
     pub source_created_at: Option<NaiveDateTime>,
     #[sea_orm(column_type = "BigInteger")]
     pub total_view: i64,

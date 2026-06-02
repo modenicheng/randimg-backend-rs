@@ -108,7 +108,7 @@ pub async fn find_crawl_ids_by_type(
     db: &DatabaseConnection,
     crawl_type: i32,
 ) -> Result<Vec<String>, DbErr> {
-    let sql = "SELECT id FROM Jobs WHERE job_type = 'crawl' AND json_extract(job, '$.crawl_type') = ?";
+    let sql = "SELECT id FROM Jobs WHERE job_type = 'randimg_backend_rs::task_queue::jobs::CrawlJob' AND json_extract(job, '$.crawl_type') = ?";
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
         sql,
@@ -128,7 +128,7 @@ pub async fn find_crawl_ids_by_type(
     db: &DatabaseConnection,
     crawl_type: i32,
 ) -> Result<Vec<String>, DbErr> {
-    let sql = "SELECT id FROM apalis.jobs WHERE job_type = 'crawl' AND (job::json->>'crawl_type')::int = $1";
+    let sql = "SELECT id FROM apalis.jobs WHERE job_type = 'randimg_backend_rs::task_queue::jobs::CrawlJob' AND (job::json->>'crawl_type')::int = $1";
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
         sql,

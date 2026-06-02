@@ -319,6 +319,14 @@ pub async fn init(database_url: &str) -> Result<(Pool, JobStorage), String> {
     let pool = apalis_sqlite::SqlitePool::connect(database_url)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Enable WAL journal mode and set busy_timeout for better concurrent access.
+    // This prevents SQLITE_BUSY errors when multiple workers write simultaneously.
+    sqlx::raw_sql("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("Failed to set SQLite pragmas: {}", e))?;
+
     apalis_sqlite::SqliteStorage::setup(&pool)
         .await
         .map_err(|e| e.to_string())?;

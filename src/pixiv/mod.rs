@@ -9,8 +9,11 @@ pub use pixiv_client::models::illust::Illust;
 pub use pixiv_client::models::user::UserPreview;
 
 /// Create a PixivApi client, optionally configured with a proxy.
-pub fn create_api(proxy: &str) -> PixivApi {
-    if proxy.is_empty() {
+///
+/// Sets `Accept-Language` header so Pixiv API responses include
+/// `translated_name` on tags in the requested language.
+pub async fn create_api(proxy: &str, accept_lang: &str) -> PixivApi {
+    let api = if proxy.is_empty() {
         PixivApi::new()
     } else {
         let client_config = ClientConfig {
@@ -18,5 +21,9 @@ pub fn create_api(proxy: &str) -> PixivApi {
             ..Default::default()
         };
         PixivApi::with_config(Config::default(), client_config)
+    };
+    if !accept_lang.is_empty() {
+        let _ = api.set_accept_lang(accept_lang).await;
     }
+    api
 }

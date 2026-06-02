@@ -36,7 +36,7 @@ async fn main() {
 
     // 从环境变量构建配置
     let config = randimg_backend_rs::config::AppConfig::from_env();
-    let oss = randimg_backend_rs::dogecloud::DogeCloudOss::new(&config);
+    let oss = randimg_backend_rs::dogecloud::DogeCloudOss::new(&config, reqwest::Client::new());
 
     // ── 上传 ──────────────────────────────────────────
     println!("[1/3] 读取本地文件...");

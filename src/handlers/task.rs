@@ -32,13 +32,14 @@ fn map_task_type(short: &str) -> &str {
 }
 const CLEAN_FAILED: &str = "failed";
 const CLEAN_CANCELLED: &str = "cancelled";
+const CLEAN_KILLED: &str = "killed";
 const CLEAN_PENDING: &str = "pending";
 const CLEAN_RUNNING: &str = "running";
 const CLEAN_ALL: &str = "all";
 
 #[derive(Debug, Deserialize)]
 pub struct CleanTasksRequest {
-    /// List of status flags to clean: "completed", "failed", "cancelled", "pending", "running", "all".
+    /// List of status flags to clean: "completed", "failed", "cancelled", "killed", "pending", "running", "all".
     pub flags: Vec<String>,
     /// Optional: only clean tasks of this job type.
     #[serde(default)]
@@ -99,6 +100,7 @@ async fn clean_tasks(
         CLEAN_COMPLETED,
         CLEAN_FAILED,
         CLEAN_CANCELLED,
+        CLEAN_KILLED,
         CLEAN_PENDING,
         CLEAN_RUNNING,
         CLEAN_ALL,
@@ -122,6 +124,7 @@ async fn clean_tasks(
             CLEAN_COMPLETED => statuses.push(apalis_job::STATUS_DONE),
             CLEAN_FAILED => statuses.push(apalis_job::STATUS_FAILED),
             CLEAN_CANCELLED => statuses.push(apalis_job::STATUS_KILLED),
+            CLEAN_KILLED => statuses.push(apalis_job::STATUS_KILLED),
             CLEAN_PENDING => {
                 statuses.push(apalis_job::STATUS_PENDING);
                 statuses.push(apalis_job::STATUS_QUEUED);
