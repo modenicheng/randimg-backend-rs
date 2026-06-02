@@ -614,6 +614,22 @@ pub async fn list_roots(
 ///   ]
 /// }
 /// ```
+///
+/// Recursively flattens a `ChildJobNode` tree into a flat `Vec<JsonValue>`.
+///
+/// For each node, this function:
+/// 1. Clones the job data
+/// 2. Injects `parent_job_id` and `root_job_id` fields
+/// 3. Pushes to the result vector
+/// 4. Recursively processes children (depth-first, pre-order traversal)
+///
+/// The root node itself is NOT included — only its descendants. This matches
+/// the nested mode behavior where the root is the URL parameter, not a child.
+///
+/// # Arguments
+/// - `nodes`: The child nodes to flatten (output of `list_children`)
+/// - `parent_id`: The job ID of the parent for the current level
+/// - `root_id`: The root job ID (constant throughout recursion, from URL path)
 fn flatten_tree(nodes: &[ChildJobNode], parent_id: &str, root_id: &str) -> Vec<serde_json::Value> {
     let mut result = Vec::new();
     for node in nodes {
@@ -636,6 +652,38 @@ pub struct TaskTreeQuery {
     pub flatten: Option<bool>,
 }
 
+/// GET /tasks/:id/tree
+///
+/// Returns the task tree rooted at `id`.
+///
+/// # Query Parameters
+///
+/// - `flatten` (optional, default: `false`)
+///   - When `false` (default): Returns nested tree structure with `children` arrays.
+///     Each node has `{ job: {...}, children: [...] }`. Frontend uses this for
+///     tree UI with expand/collapse.
+///   - When `true`: Returns flat list in `tasks` array. Each item includes
+///     `parent_job_id` (direct parent) and `root_job_id` (the URL path root).
+///     Frontend uses this for table/list UI with sorting and filtering.
+///
+/// # Design Decision: Why flatten?
+///
+/// The nested tree format is natural for tree UI but painful for:
+/// - Sorting/filtering across all descendants (requires recursive traversal in JS)
+/// - Status rollup queries (need to flatten first anyway)
+/// - Table display with columns (nested JSON doesn't map to rows)
+///
+/// The flat format trades tree structure for O(1) access to any task by index.
+/// `parent_job_id` and `root_job_id` preserve the hierarchy information so the
+/// frontend can reconstruct the tree if needed (build adjacency list from
+/// parent_job_id).
+///
+/// # Why not a separate endpoint?
+///
+/// `?flatten` is a query parameter (not `/tasks/:id/tree/flat`) because:
+/// - Same underlying data, different serialization
+/// - Single route to maintain
+/// - Consistent with REST conventions (representation varies by query params)
 pub async fn get_task_tree(
     State(state): State<Arc<AppState>>,
     _auth: AuthUser,
@@ -653,12 +701,22 @@ pub async fn get_task_tree(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     if q.flatten.unwrap_or(false) {
+        // FLATTENED MODE: Return all descendants as a flat array.
+        // Each item has parent_job_id and root_job_id for hierarchy reconstruction.
+        // Response shape: { "root_job_id": "...", "tasks": [...] }
+        //
+        // This differs from the default nested mode which returns:
+        // { "root_job_id": "...", "children": [{ job, children }] }
+        //
+        // The different shapes are intentional — NOT a bug. See function doc.
         let tasks = flatten_tree(&tree, &task_id, &task_id);
         Ok(Json(serde_json::json!({
             "root_job_id": task_id,
             "tasks": tasks,
         })))
     } else {
+        // NESTED MODE: Return tree structure with children arrays.
+        // Each node has { job: {...}, children: [...] } recursively.
         Ok(Json(serde_json::json!({
             "root_job_id": task_id,
             "children": tree,
