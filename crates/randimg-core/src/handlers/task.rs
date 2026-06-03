@@ -247,24 +247,11 @@ fn unmap_status(status: &str) -> Vec<&'static str> {
 }
 
 // ---------------------------------------------------------------------------
-// Timestamp formatting (feature-gated for SQLite i64 vs Postgres DateTime)
+// Timestamp formatting
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "db-sqlite")]
-fn fmt_ts(ts: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp(ts, 0)
-        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-}
-
-#[cfg(feature = "db-postgres")]
-fn fmt_ts(ts: chrono::DateTime<chrono::FixedOffset>) -> String {
+fn fmt_ts(ts: chrono::DateTime<impl chrono::TimeZone>) -> String {
     ts.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string()
-}
-
-/// Format a unix timestamp (i64) — used for raw SQL query results that always return i64.
-fn fmt_ts_i64(ts: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp(ts, 0)
-        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -461,19 +448,8 @@ fn tree_row_to_json(t: &apalis_job::Model) -> serde_json::Value {
     // Deserialize the job BLOB to extract the payload.
     let payload = serde_json::from_slice::<serde_json::Value>(&t.job).ok();
 
-    #[cfg(feature = "db-sqlite")]
-    let created_at = fmt_ts(t.run_at);
-    #[cfg(feature = "db-postgres")]
     let created_at = Some(fmt_ts(t.run_at));
-
-    #[cfg(feature = "db-sqlite")]
-    let completed_at = t.done_at.and_then(fmt_ts);
-    #[cfg(feature = "db-postgres")]
     let completed_at = t.done_at.map(fmt_ts);
-
-    #[cfg(feature = "db-sqlite")]
-    let error_message = t.last_result.clone();
-    #[cfg(feature = "db-postgres")]
     let error_message = t.last_result.as_ref().map(|v| v.to_string());
 
     serde_json::json!({
@@ -579,8 +555,8 @@ pub async fn list_roots(
                 "completed"
             };
 
-            let created_at = fmt_ts_i64(r.run_at);
-            let completed_at = r.done_at.and_then(fmt_ts_i64);
+            let created_at = Some(r.run_at.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            let completed_at = r.done_at.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
             serde_json::json!({
                 "id": r.id,

@@ -46,6 +46,10 @@ pub struct CrawlJob {
     /// User illust type: "illust", "manga" (default: "illust").
     #[serde(default)]
     pub illust_type: Option<String>,
+    /// Filter by illust type: list of types to include (e.g., ["illust", "manga"]).
+    /// If None or empty, all types are included. Default: None (no filter).
+    #[serde(default)]
+    pub illust_type_filter: Option<Vec<String>>,
     /// Exclude R18 content (x_restrict > 0). Default: false.
     #[serde(default)]
     pub exclude_r18: Option<bool>,
@@ -143,10 +147,14 @@ pub struct RefreshPixivTokenJob {
 #[async_trait]
 impl AsyncRunnable for CrawlJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
+        tracing::info!(crawler_id = self.crawler_id, crawl_type = self.crawl_type, "CrawlJob started");
         let state = worker_state();
-        handlers::handle_crawl(self.clone(), state)
-            .await
-            .map_err(|e| FangError { description: e })
+        let result = handlers::handle_crawl(self.clone(), state).await;
+        match &result {
+            Ok(()) => tracing::info!(crawler_id = self.crawler_id, "CrawlJob completed"),
+            Err(e) => tracing::error!(crawler_id = self.crawler_id, error = %e, "CrawlJob failed"),
+        }
+        result.map_err(|e| FangError { description: e })
     }
 
     fn task_type(&self) -> String {
@@ -166,10 +174,14 @@ impl AsyncRunnable for CrawlJob {
 #[async_trait]
 impl AsyncRunnable for DownloadJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
+        tracing::info!(image_id = self.image_id, path = %self.image_path, "DownloadJob started");
         let state = worker_state();
-        handlers::handle_download(self.clone(), state)
-            .await
-            .map_err(|e| FangError { description: e })
+        let result = handlers::handle_download(self.clone(), state).await;
+        match &result {
+            Ok(()) => tracing::info!(image_id = self.image_id, "DownloadJob completed"),
+            Err(e) => tracing::error!(image_id = self.image_id, error = %e, "DownloadJob failed"),
+        }
+        result.map_err(|e| FangError { description: e })
     }
 
     fn task_type(&self) -> String {
@@ -189,10 +201,14 @@ impl AsyncRunnable for DownloadJob {
 #[async_trait]
 impl AsyncRunnable for ColorExtractJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
+        tracing::info!(image_id = self.image_id, path = %self.image_path, "ColorExtractJob started");
         let state = worker_state();
-        handlers::handle_color_extract(self.clone(), state)
-            .await
-            .map_err(|e| FangError { description: e })
+        let result = handlers::handle_color_extract(self.clone(), state).await;
+        match &result {
+            Ok(()) => tracing::info!(image_id = self.image_id, "ColorExtractJob completed"),
+            Err(e) => tracing::error!(image_id = self.image_id, error = %e, "ColorExtractJob failed"),
+        }
+        result.map_err(|e| FangError { description: e })
     }
 
     fn task_type(&self) -> String {
@@ -212,10 +228,14 @@ impl AsyncRunnable for ColorExtractJob {
 #[async_trait]
 impl AsyncRunnable for UploadJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
+        tracing::info!(image_id = self.image_id, path = %self.image_path, "UploadJob started");
         let state = worker_state();
-        handlers::handle_upload(self.clone(), state)
-            .await
-            .map_err(|e| FangError { description: e })
+        let result = handlers::handle_upload(self.clone(), state).await;
+        match &result {
+            Ok(()) => tracing::info!(image_id = self.image_id, "UploadJob completed"),
+            Err(e) => tracing::error!(image_id = self.image_id, error = %e, "UploadJob failed"),
+        }
+        result.map_err(|e| FangError { description: e })
     }
 
     fn task_type(&self) -> String {
@@ -235,10 +255,14 @@ impl AsyncRunnable for UploadJob {
 #[async_trait]
 impl AsyncRunnable for AccessibilityCheckJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
+        tracing::info!(image_id = self.image_id, path = %self.image_path, "AccessibilityCheckJob started");
         let state = worker_state();
-        handlers::handle_accessibility_check(self.clone(), state)
-            .await
-            .map_err(|e| FangError { description: e })
+        let result = handlers::handle_accessibility_check(self.clone(), state).await;
+        match &result {
+            Ok(()) => tracing::info!(image_id = self.image_id, "AccessibilityCheckJob completed"),
+            Err(e) => tracing::error!(image_id = self.image_id, error = %e, "AccessibilityCheckJob failed"),
+        }
+        result.map_err(|e| FangError { description: e })
     }
 
     fn task_type(&self) -> String {
@@ -258,10 +282,14 @@ impl AsyncRunnable for AccessibilityCheckJob {
 #[async_trait]
 impl AsyncRunnable for DiscoverJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
+        tracing::info!(hop = self.hop, "DiscoverJob started");
         let state = worker_state();
-        handlers::handle_discover(self.clone(), state)
-            .await
-            .map_err(|e| FangError { description: e })
+        let result = handlers::handle_discover(self.clone(), state).await;
+        match &result {
+            Ok(()) => tracing::info!(hop = self.hop, "DiscoverJob completed"),
+            Err(e) => tracing::error!(hop = self.hop, error = %e, "DiscoverJob failed"),
+        }
+        result.map_err(|e| FangError { description: e })
     }
 
     fn task_type(&self) -> String {
@@ -281,10 +309,14 @@ impl AsyncRunnable for DiscoverJob {
 #[async_trait]
 impl AsyncRunnable for RefreshPixivTokenJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
+        tracing::info!(credential_id = self.credential_id, "RefreshPixivTokenJob started");
         let state = worker_state();
-        handlers::handle_refresh_pixiv_token(self.clone(), state)
-            .await
-            .map_err(|e| FangError { description: e })
+        let result = handlers::handle_refresh_pixiv_token(self.clone(), state).await;
+        match &result {
+            Ok(()) => tracing::info!(credential_id = self.credential_id, "RefreshPixivTokenJob completed"),
+            Err(e) => tracing::error!(credential_id = self.credential_id, error = %e, "RefreshPixivTokenJob failed"),
+        }
+        result.map_err(|e| FangError { description: e })
     }
 
     fn task_type(&self) -> String {

@@ -117,6 +117,8 @@ impl QueueBackend {
         .await
         .map_err(|e| format!("创建任务记录失败: {}", e))?;
 
+        tracing::info!(task_id = %task.id, task_type, "Task record created");
+
         // 2. 插入到 fang 队列
         //
         // 使用 AsyncRunnable 占位符插入。Task 6 将为每个 job 类型
@@ -126,12 +128,15 @@ impl QueueBackend {
             .await
             .map_err(|e| format!("插入 fang 任务失败: {}", e))?;
 
-        // 3. 关联 fang 任务 ID（同时更新状态为 queued）
         let fang_task_id = uuid_to_i64(&fang_task.id);
+        tracing::info!(task_id = %task.id, fang_task_id, "Pushed to fang queue");
+
+        // 3. 关联 fang 任务 ID（同时更新状态为 queued）
         query::task::link_fang_task(db, &task.id, fang_task_id)
             .await
             .map_err(|e| format!("关联 fang 任务失败: {}", e))?;
 
+        tracing::info!(task_id = %task.id, "Task queued successfully");
         Ok(task.id)
     }
 

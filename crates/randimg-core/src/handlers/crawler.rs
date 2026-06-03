@@ -36,6 +36,9 @@ pub struct CreateCrawlerRequest {
     pub ranking_mode: Option<String>,
     /// User illust type (crawl_type=1): "illust", "manga". Default: "illust".
     pub illust_type: Option<String>,
+    /// Filter by illust type: list of types to include (e.g., ["illust", "manga"]).
+    /// If None or empty, all types are included. Default: None (no filter).
+    pub illust_type_filter: Option<Vec<String>>,
     /// Exclude R18 content (x_restrict > 0). Default: false.
     pub exclude_r18: Option<bool>,
     /// Exclude AI-generated content (illust_ai_type > 0). Default: false.
@@ -96,6 +99,7 @@ pub async fn create_crawler(
                 target_search_prompt: body.target_search_prompt,
                 ranking_mode: body.ranking_mode,
                 illust_type: body.illust_type,
+                illust_type_filter: body.illust_type_filter,
                 exclude_r18: body.exclude_r18,
                 exclude_ai: body.exclude_ai,
                 max_pages: body.max_pages,

@@ -116,7 +116,7 @@ async fn crawl_ranking(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust, job.exclude_r18, job.exclude_ai).await?;
+            let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
                 let download_job = DownloadJob {
                     image_id: dl.image_id,
@@ -192,7 +192,7 @@ async fn crawl_user(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust, job.exclude_r18, job.exclude_ai).await?;
+            let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
                 let download_job = DownloadJob {
                     image_id: dl.image_id,
@@ -266,7 +266,7 @@ async fn crawl_bookmarks(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust, job.exclude_r18, job.exclude_ai).await?;
+            let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
                 let download_job = DownloadJob {
                     image_id: dl.image_id,
@@ -316,9 +316,23 @@ struct DownloadInfo {
 async fn save_illust(
     state: &WorkerState,
     illust: &crate::pixiv::Illust,
+    illust_type_filter: Option<Vec<String>>,
     exclude_r18: Option<bool>,
     exclude_ai: Option<bool>,
 ) -> Result<Vec<DownloadInfo>, String> {
+    // Filter by illust type if filter is specified
+    if let Some(ref types) = illust_type_filter {
+        if !types.is_empty() {
+            let illust_type = illust.r#type.as_ref()
+                .map(|t| format!("{:?}", t).to_lowercase())
+                .unwrap_or_default();
+            if !types.contains(&illust_type) {
+                tracing::debug!("Skipping illust {} (type={}, not in filter {:?})", illust.id, illust_type, types);
+                return Ok(Vec::new());
+            }
+        }
+    }
+
     // Filter out R18 content if requested
     if exclude_r18.unwrap_or(false) {
         if illust.x_restrict.unwrap_or(0) > 0 {
@@ -920,7 +934,7 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
         let data = resp.data.ok_or("No data in illust_related response")?;
 
         for illust in &data.illusts {
-            let downloads = save_illust(state, illust, None, None).await?;
+            let downloads = save_illust(state, illust, None, None, None).await?;
             for dl in downloads {
                 let download_job = DownloadJob {
                     image_id: dl.image_id,

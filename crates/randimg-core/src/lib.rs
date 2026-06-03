@@ -32,7 +32,7 @@ pub struct WorkerState {
 /// from `AppConfig`.
 ///
 /// `worker_handle`: Tokio runtime handle to spawn workers on. This allows isolating
-/// background workers from the HTTP server runtime to prevent API starvation.
+/// background workers from the HTTP runtime to prevent API starvation.
 pub async fn spawn_workers(
     state: Arc<WorkerState>,
     worker_handle: tokio::runtime::Handle,
@@ -53,10 +53,13 @@ pub async fn spawn_workers(
         .queue(queue)
         .build();
 
+    tracing::info!("Spawning fang worker pool with 2 workers");
+
     let handle = worker_handle.spawn(async move {
         pool.start().await;
     });
     handles.push(handle);
 
+    tracing::info!(count = handles.len(), "Worker pool spawned");
     handles
 }
