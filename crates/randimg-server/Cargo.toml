@@ -1,0 +1,36 @@
+[package]
+name = "randimg-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "randimg-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "create-admin"
+path = "src/bin/create_admin.rs"
+
+[dependencies]
+randimg-core = { path = "../randimg-core", default-features = false, features = ["http"] }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+migration = { workspace = true }
+sea-orm = { workspace = true }
+
+[features]
+default = ["db-sqlite", "queue-postgres", "http"]
+db-sqlite = ["randimg-core/db-sqlite"]
+db-postgres = ["randimg-core/db-postgres"]
+queue-postgres = ["randimg-core/queue-postgres"]
+http = ["randimg-core/http"]

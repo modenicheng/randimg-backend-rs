@@ -1,0 +1,26 @@
+[package]
+name = "randimg-worker"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "randimg-worker"
+path = "src/main.rs"
+
+[dependencies]
+randimg-core = { path = "../randimg-core", default-features = false }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+
+[features]
+default = ["db-sqlite", "queue-postgres"]
+db-sqlite = ["randimg-core/db-sqlite"]
+db-postgres = ["randimg-core/db-postgres"]
+queue-postgres = ["randimg-core/queue-postgres"]

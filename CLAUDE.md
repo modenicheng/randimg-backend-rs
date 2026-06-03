@@ -2,76 +2,125 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Knowledge Base**: See [AGENTS.md](AGENTS.md) for the hierarchical project knowledge base with confidence ratings and source tracking.
+
 ## Project Overview
 
-Randimg is a Rust backend that crawls images from Pixiv, extracts color palettes via KMeans clustering in CIELAB space, and serves them through an HTTP API. It uses SeaORM with SQLite (dev) / PostgreSQL (prod), Axum for the web layer, and Apalis for background job processing (crawling, downloading, color extraction).
+Randimg is a Rust backend that crawls images from Pixiv, extracts color palettes via KMeans clustering in CIELAB space, and serves them through an HTTP API. It uses SeaORM with SQLite (dev) / PostgreSQL (prod), Axum for the web layer, and Fang for background job processing (crawling, downloading, color extraction).
 
 ## Build & Run
 
 ```bash
-# Build (default SQLite)
+# Default: SQLite API + PostgreSQL queue
 cargo build
 
-# Build with PostgreSQL
-cargo build --no-default-features --features postgres
+# SQLite queue (no PostgreSQL required)
+cargo build --no-default-features --features db-sqlite,queue-sqlite
 
-# Run (requires .env with SECRET_KEY set to non-default value)
-cargo run
+# PostgreSQL API + PostgreSQL queue (production)
+cargo build --no-default-features --features db-postgres,queue-postgres
 
-# Run tests (color unit tests run standalone; API tests require a running server)
-cargo test
+# Run server
+cargo run -p randimg-server
 
-# Run a single test
-cargo test test_name_here
+# Run worker (headless, no Axum)
+cargo run -p randimg-worker
 
-# Create an admin user (interactive CLI)
-cargo run --bin create_admin
+# Run tests (skip color tests — they crash machines)
+cargo test -p randimg-core --no-default-features --features db-sqlite,queue-sqlite -- --skip kmeans --skip extract_theme --skip histogram --skip palette --skip primary_color --skip lab_round
 
-# Run the color extraction benchmark demo
-cargo run --example color_extract_demo -- path/to/image.jpg
+# Create admin user
+cargo run -p randimg-server --bin create-admin
+
+# Color extraction demo
+cargo run -p randimg-core --example color_extract_demo -- path/to/image.jpg
 ```
 
 ## Architecture
 
-### Layered structure: handlers → db/query → entities
+### Workspace structure
 
-- **`src/handlers/`** — Axum route handlers. Each handler receives `State<Arc<AppState>>` and optionally `AuthUser`/`OptionalAuthUser` extractors.
-- **`src/db/query/`** — Database query functions, one file per entity. This is where SeaORM `Select`, `Insert`, `Update`, `Delete` operations live.
-- **`src/db/entities/`** — SeaORM entity models with `DeriveEntityModel` and relation definitions.
+```
+Cargo.toml                    # Virtual workspace root
+├── crates/randimg-core/      # Library: WorkerState, all shared code
+├── crates/randimg-server/    # Binary: ServerState wraps WorkerState, Axum HTTP
+├── crates/randimg-worker/    # Binary: WorkerState only, headless workers (NO axum)
+└── migration/                # SeaORM migrations
+```
 
-### Task queue (`src/task_queue/`)
+### Feature flags
 
-Uses the Apalis library with `apalis-sqlite` (dev) / `apalis-postgres` (prod) for job storage. Seven workers, one per job type: `crawl`, `download`, `color_extract`, `upload`, `accessibility_check`, `discover`, `refresh_pixiv_token`. Jobs are defined as structs in `src/task_queue/jobs.rs`, handlers live in `src/task_queue/handlers.rs`, and workers are spawned via the `spawn_workers()` function in `src/lib.rs` (uses a local `spawn_worker!` macro). Failed tasks retry up to 3 times (Apalis built-in). The backend abstraction (`Pool`, `JobStorage`, `init()`) lives in `src/db_backend.rs`.
+| Use Case | Features | Command |
+|---|---|---|
+| Dev (default) | `db-sqlite` + `queue-postgres` | `cargo build` |
+| Dev (no PostgreSQL) | `db-sqlite` + `queue-sqlite` | `cargo build --no-default-features --features db-sqlite,queue-sqlite` |
+| Production | `db-postgres` + `queue-postgres` | `cargo build --no-default-features --features db-postgres,queue-postgres` |
 
-**Job pipeline**: Crawl → Download → (ColorExtract + Upload + AccessibilityCheck in parallel) → Discover. Parent-child relationships are tracked in `task_dependencies` table. `DownloadJob` has a `root_job_id` so downstream tasks appear as direct children of the crawl task. `db_backend.rs` provides `push_*_with_parent()` methods that pre-generate ULIDs to record hierarchy before jobs execute.
+### State types
+
+- **`WorkerState`** (core crate): db, config, oss, http_client, queue
+- **`ServerState`** (server crate): wraps WorkerState
+
+Core task handlers access global state via `OnceCell<Arc<WorkerState>>`. Server Axum handlers use `State<Arc<WorkerState>>` (passed via `.with_state(Arc::new(state.worker.clone()))`).
+
+Workers run in the separate `randimg-worker` binary — the server only serves HTTP. The server pushes jobs to the queue (e.g. refresh-pixiv-token on startup) but does not run workers.
+
+- **`crates/randimg-core/src/handlers/`** — Axum route handlers. Each handler receives `State<Arc<WorkerState>>` and optionally `AuthUser`/`OptionalAuthUser` extractors.
+- **`crates/randimg-core/src/db/query/`** — Database query functions, one file per entity. This is where SeaORM `Select`, `Insert`, `Update`, `Delete` operations live.
+- **`crates/randimg-core/src/db/entities/`** — SeaORM entity models with `DeriveEntityModel` and relation definitions.
+
+### Task queue (`crates/randimg-core/src/task_queue/`)
+
+Uses the Fang library with async PostgreSQL backend. Database separation:
+
+- **`API_DATABASE_URL`** — SeaORM manages business data + `tasks` table for task metadata
+- **`QUEUE_DATABASE_URL`** — Fang manages task scheduling (PostgreSQL)
+
+Feature-gated queue backends:
+- `queue-postgres` (default) — `fang` with async PostgreSQL
+- `queue-sqlite` — fallback for single-machine dev (SQLite-backed queue)
+
+Seven workers, one per job type: `crawl`, `download`, `color_extract`, `upload`, `accessibility_check`, `discover`, `refresh_pixiv_token`. Jobs implement the `AsyncRunnable` trait with `#[typetag::serde]` + `#[async_trait]`. Workers are spawned via the `spawn_workers()` function in `src/lib.rs` (uses a local `spawn_worker!` macro). The backend abstraction lives in `src/db_backend.rs`.
+
+**Task push flow**: `query::task::create()` creates a row in the `tasks` table → `queue.insert_task()` enqueues it in Fang → `query::task::link_fang_task()` links the `fang_task_id` back to the tasks table.
+
+The worker binary (`crates/randimg-worker/`) runs all 7 workers without Axum — true headless operation for distributed deployment.
+
+**Retry policy design**: Configured via `TASK_MAX_RETRIES` (default: 3) and `TASK_BACKOFF_BASE` (default: 2) for exponential backoff. Network-bound tasks use retries; compute-bound tasks (color_extract) can be configured with fewer retries since KMeans is deterministic.
+
+| Task Type | Retry Policy | Rationale |
+|-----------|--------------|-----------|
+| crawl, download, upload, accessibility-check, discover, refresh-pixiv-token | Exponential backoff, max retries | Network-bound (API calls, HTTP requests) |
+| color_extract | Minimal retries | Compute-bound (KMeans is deterministic) |
+
+**Job pipeline**: Crawl → Download → (ColorExtract + Upload + AccessibilityCheck in parallel) → Discover. Parent-child relationships are tracked in `task_dependencies` table. `DownloadJob` has a `root_job_id` so downstream tasks appear as direct children of the crawl task. The `db_backend.rs` provides methods that pre-generate ULIDs to record hierarchy before jobs execute.
 
 #### Color worker process isolation
 
 The color extraction worker (KMeans + rayon) is CPU-intensive. Two modes:
 
-1. **In-process** (default): color-extract runs as an Apalis worker inside the main binary. `spawn_blocking` + dedicated rayon pool (`src/color/mod.rs::run_on_color_pool`) prevent it from blocking the async runtime.
+1. **In-process** (default): color-extract runs as a Fang worker inside the main binary. `spawn_blocking` + dedicated rayon pool (`crates/randimg-core/src/color/mod.rs::run_on_color_pool`) prevent it from blocking the async runtime.
 
-2. **Separate process** (`COLOR_WORKER_STANDALONE=true`): the main binary skips spawning the color-extract worker. Run `cargo run --bin color-worker` as a separate process. Both binaries connect to the same database; Apalis storage handles coordination.
+2. **Separate process** (`COLOR_WORKER_STANDALONE=true`): the server binary skips spawning the color-extract worker. Run `cargo run -p randimg-worker` as a separate process — it runs all 7 workers including color-extract. Both binaries connect to the same database; Fang storage handles coordination.
 
 Environment variables:
-- `COLOR_WORKER_STANDALONE` — `true` to exclude color-extract from main binary
+- `COLOR_WORKER_STANDALONE` — `true` to exclude color-extract from server binary
 - `COLOR_WORKER_RAYON_THREADS` — rayon thread count for color extraction (default: CPU count)
-- `COLOR_WORKER_AUTO_SPAWN` — `true` to auto-spawn color-worker as child process from main
 
-#### Apalis status semantics — "Killed" means "retries exhausted", NOT "manually cancelled"
+#### Fang status semantics
 
-This is a common source of confusion. Apalis's `calculate_status()` (in both `apalis-sqlite` and `apalis-postgres`) uses these rules:
+Fang uses different status names than the previous Apalis backend. The `tasks` table in the API database maintains its own status set, synced with Fang via `fang_task_id`:
 
-| Condition | DB status |
-|-----------|-----------|
-| Handler returns `Ok` | `"Done"` |
-| Handler returns `Err`, retries remain | `"Failed"` (transient) |
-| Handler returns `Err`, retries exhausted | **`"Killed"`** (terminal) |
-| Handler returns `AbortError` | **`"Killed"`** |
+| Condition | Task status |
+|-----------|-------------|
+| Task created, not yet picked up | `pending` |
+| Worker is executing | `running` |
+| Handler returns `Ok` | `completed` |
+| Handler returns `Err`, retries remain | `failed` (transient) |
+| Handler returns `Err`, retries exhausted | `failed` (terminal) |
+| Manually cancelled | `cancelled` |
 
-In Apalis, **`"Failed"` is a transient state** (the attempt failed but will be retried), and **`"Killed"` is the terminal failure state** (all retries exhausted, job is dead). This means a task that fails after exhausting all retries gets status `"Killed"` in the database — it was never manually cancelled.
-
-The frontend already has a dedicated chip for `"killed"` (red, label "失败"), so we deliberately keep `STATUS_FAILED → "failed"` and `STATUS_KILLED → "killed"` as **distinct** API values rather than collapsing them — see the derived-status rules below for how the rollup treats them.
+The API exposes these statuses directly. The `failed` state covers both transient failures (will be retried) and terminal failures (retries exhausted). The `killed` status from the previous Apalis backend has been removed.
 
 #### Derived status for root tasks (`GET /tasks/roots`)
 
@@ -79,35 +128,39 @@ The frontend already has a dedicated chip for `"killed"` (red, label "失败"), 
 
 | Flag | Meaning |
 |---|---|
-| `has_active` | At least one descendant is `Pending` / `Queued` / `Running`. |
-| `has_failed` | At least one descendant is `Failed` **or** `Killed`. |
-| `has_completed` | At least one descendant is `Done`. |
-| `has_killed_terminal` | At least one descendant is in the terminal `Killed` state specifically (subset of `has_failed`). |
+| `has_active` | At least one descendant is `Pending` / `Running`. |
+| `has_failed` | At least one descendant is `Failed`. |
+| `has_completed` | At least one descendant is `Completed`. |
 
 These feed two layers of logic:
 
 1. **Dead-subtree short-circuit** in `list_roots::effective` (`src/handlers/task.rs`):
-   - If `has_active == false && has_failed && !has_completed && has_killed_terminal == has_failed` — every failed descendant is terminal, no path to recovery — the API `status` is forced to `"killed"` even if the root itself is still retrying. This is the invariant "if all descendants are definitively done and none succeeded, the root is dead too".
+   - If `has_active == false && has_failed && !has_completed` — every failed descendant is terminal, no path to recovery — the API `status` is forced to `"failed"` even if the root itself is still retrying.
 2. **Otherwise root-priority + rollup**:
-   - If the root's own Apalis status is anything other than `Done` → use `map_status(root.status)` directly.
-   - If the root is `Done` and has descendants → call `derived_status_from_flags(active, failed, completed, killed)`:
+   - If the root's own status is anything other than `Completed` → use `map_status(root.status)` directly.
+   - If the root is `Completed` and has descendants → call `derived_status_from_flags(active, failed, completed)`:
      - `has_active` → `"running"` (any in-flight descendant overrides everything).
      - `has_failed && has_completed` → `"partial_success"`.
-     - `has_failed` only (with `has_killed_terminal < has_failed`) → `"failed"` (some descendants still transient; retries may save them).
+     - `has_failed` only → `"failed"`.
      - `has_completed` only → `"completed"`.
-     - else → `"pending"` (rollup not normally consulted here, but degrades safely).
-   - If the root is `Done` and has no descendants → `"completed"`.
+     - else → `"pending"`.
+   - If the root is `Completed` and has no descendants → `"completed"`.
 
-The same `has_killed_terminal` flag is also used by the `derived_status` filter in `list_roots_derived` and `count_roots_derived` so that the "killed" filter matches the rollup output exactly (priority: `killed > failed > partial_success > running > completed > pending`).
+The same logic is also used by the `derived_status` filter in `list_roots_derived` and `count_roots_derived` so that filters match the rollup output exactly (priority: `failed > partial_success > running > completed > pending`).
 
-#### ⚠️ RetryPolicy vs max_attempts mismatch
+#### Task concurrency
 
-`spawn_workers()` in `src/lib.rs` configures `RetryPolicy::retries(3)` (in-memory Tower retry middleware), but does **not** set `max_attempts` on the SQL context. The default `max_attempts` in Apalis SQL is **5** (see `apalis-sql/src/context.rs`). These are two independent retry mechanisms:
+Each worker's concurrency is configurable via environment variables:
 
-- `RetryPolicy::retries(3)` — in-memory retries that re-call the service without touching the DB.
-- `max_attempts` — the SQL backend's ack logic decides `Failed` vs `Killed` based on this value.
-
-If you want 3 total attempts, set both `RetryPolicy::retries(2)` and `.max_attempts(3)`. Otherwise the job may be retried more times than expected before reaching terminal `"Killed"` status.
+| Worker | Env Var | Default |
+|--------|---------|---------|
+| crawl | `TASK_CONCURRENCY_CRAWL` | 2 |
+| download | `TASK_CONCURRENCY_DOWNLOAD` | 4 |
+| color_extract | `TASK_CONCURRENCY_COLOR_EXTRACT` | 2 |
+| upload | `TASK_CONCURRENCY_UPLOAD` | 2 |
+| accessibility_check | `TASK_CONCURRENCY_ACCESSIBILITY_CHECK` | 2 |
+| discover | `TASK_CONCURRENCY_DISCOVER` | 1 |
+| refresh_pixiv_token | `TASK_CONCURRENCY_REFRESH_PIXIV_TOKEN` | 1 |
 
 ### Color pipeline (`src/color/`)
 
@@ -123,38 +176,42 @@ All settings come from environment variables (loaded via `dotenvy`). The app pan
 
 ## Key Files
 
-- **`src/main.rs`** — Entry point: config, tracing setup, DB init, task runner startup, Axum router definition (inline via `.merge()` on each handler's `routes()` function), graceful shutdown (SIGINT/SIGTERM).
-- **`src/lib.rs`** — Crate root: re-exports all modules, defines `AppState` (shared DB connection + config).
-- **`src/error.rs`** — `AppError` enum with `IntoResponse`; `From<DbErr>` for automatic conversion.
-- **`src/db_backend.rs`** — Database backend abstraction: `Pool` type, `JobStorage` (holds typed job storages), `init()` to connect and set up Apalis.
-- **`src/task_queue/jobs.rs`** — Job struct definitions (one per task type).
-- **`src/task_queue/handlers.rs`** — Job handler functions (one per task type).
-- **`src/task_queue/mod.rs`** — Re-exports jobs and handlers.
-- **`src/db/query/image.rs`** — Most complex query file: random selection, paginated list with popularity scoring, color search with bounding-box pre-filter, discover seed selection.
-- **`src/db/query/task_tree.rs`** — Recursive CTE (SQLite + PostgreSQL) computing `has_active` / `has_failed` / `has_completed` / `has_killed_terminal` flags per root; `derived_status_from_flags` implements the rollup; `list_roots_derived` / `count_roots_derived` apply derived-status filters in SQL.
-- **`src/color/kmeans.rs`** — KMeans++ with empty-cluster recovery and parallel chunk assignment.
-- **`src/handlers/image.rs`** — Image serving with path traversal protection (canonicalize + prefix check).
+- **`crates/randimg-server/src/main.rs`** — Server entry point: config, tracing, DB init, Axum router, graceful shutdown.
+- **`crates/randimg-worker/src/main.rs`** — Worker entry point: config, tracing, DB init, Fang workers, graceful shutdown. NO Axum.
+- **`crates/randimg-core/src/lib.rs`** — Crate root: re-exports all modules, defines `WorkerState` (shared DB connection + config).
+- **`crates/randimg-core/src/config.rs`** — `AppConfig` struct with all env vars including `api_database_url` and `queue_database_url`.
+- **`crates/randimg-core/src/db_backend.rs`** — Feature-gated queue backend init, `AsyncRunnable` task definitions.
+- **`crates/randimg-core/src/error.rs`** — `AppError` enum with `IntoResponse`; `From<DbErr>` for automatic conversion.
+- **`crates/randimg-core/src/task_queue/jobs.rs`** — Job struct definitions (one per task type), implementing `AsyncRunnable`.
+- **`crates/randimg-core/src/task_queue/handlers.rs`** — Job handler functions (one per task type).
+- **`crates/randimg-core/src/db/query/image.rs`** — Most complex query file: random selection, paginated list with popularity scoring, color search with bounding-box pre-filter, discover seed selection.
+- **`crates/randimg-core/src/db/query/task_tree.rs`** — Recursive CTE (SQLite + PostgreSQL) computing `has_active` / `has_failed` / `has_completed` flags per root; `derived_status_from_flags` implements the rollup; `list_roots_derived` / `count_roots_derived` apply derived-status filters in SQL.
+- **`crates/randimg-core/src/color/kmeans.rs`** — KMeans++ with empty-cluster recovery and parallel chunk assignment.
+- **`crates/randimg-core/src/handlers/image.rs`** — Image serving with path traversal protection (canonicalize + prefix check).
 
 ## Database & Migrations
 
-Migrations live in `migration/` as a path dependency and run automatically on startup. SeaORM dual-database support is gated by feature flags (`sqlite` / `postgres`) — these are mutually exclusive. The `apalis_job` entity is feature-gated for type differences between SQLite (`i64` timestamps, `String` metadata) and PostgreSQL (`DateTimeWithTimeZone`, `JsonValue`). New migrations go in `migration/src/` with the `m{YYYYMMDD}_{seq}_{name}.rs` naming convention.
+Migrations live in `migration/` as a path dependency and run automatically on startup. SeaORM dual-database support is gated by feature flags (`db-sqlite` / `db-postgres`) — these are mutually exclusive. Queue backends are gated by `queue-sqlite` / `queue-postgres` (also mutually exclusive). The API database and queue database are separate: `API_DATABASE_URL` for SeaORM business data, `QUEUE_DATABASE_URL` for Fang task scheduling. New migrations go in `migration/src/` with the `m{YYYYMMDD}_{seq}_{name}.rs` naming convention.
 
 ## Environment Variables
 
 See `.env.example` for the full list. Critical ones:
-- `DATABASE_URL` — `sqlite://data/randimg.db` (dev) or PostgreSQL connection string
+- `API_DATABASE_URL` — `sqlite://data/randimg.db` (dev) or PostgreSQL connection string for API database
+- `QUEUE_DATABASE_URL` — PostgreSQL connection string for Fang queue database
 - `SECRET_KEY` — JWT signing secret (must change from default)
 - `PIXIV_REFRESH_TOKEN` — Required for Pixiv crawling
 - `CDN_BASE_URL` — Prefix for image URLs in API responses
 - `IMAGE_DIR` — Local filesystem path for downloaded images
 - `SERVER_ADDR` — Supports TCP (`0.0.0.0:8000`) and Unix socket (`unix:///run/randimg.sock`)
+- `TASK_MAX_RETRIES` — Max retry count for failed tasks (default: 3)
+- `TASK_BACKOFF_BASE` — Exponential backoff base in seconds (default: 2)
 
 ## Conventions
 
 - Error handling: return `AppError` variants, not raw `StatusCode`. Internal errors are logged at ERROR level before returning a sanitized message.
-- Each handler module exports a `routes()` function returning an `Axum Router`. Routes are merged in `main.rs`.
+- Each handler module exports a `routes()` function returning an `Axum Router`. Routes are merged in `crates/randimg-server/src/main.rs`.
 - Batch-fetch associations to avoid N+1 queries (see `list_images` in `db/query/image.rs`).
-- New task types: define a job struct in `task_queue/jobs.rs`, add a handler in `task_queue/handlers.rs`, add a storage field in `db_backend.rs::JobStorage`, register a worker in `lib.rs::spawn_workers()`.
-- Routes are registered in `main.rs` by adding a `.merge(module::routes())` call to the router.
+- New task types: define a job struct implementing `AsyncRunnable` in `task_queue/jobs.rs`, add a handler in `task_queue/handlers.rs`, register a worker in `lib.rs::spawn_workers()`.
+- Routes are registered in `crates/randimg-server/src/main.rs` by adding a `.merge(module::routes())` call to the router.
 - Use `tracing` macros (`info!`, `error!`, `debug!`) — not `println!`.
-- Task status exposure: `map_status()` keeps Apalis `Failed` and `Killed` as **distinct** API values (`failed` and `killed`). The root rollup in `list_roots::effective` aggregates them via the `has_failed` / `has_killed_terminal` flags — see the "Derived status for root tasks" section above. When adding new derived-status logic, update `derived_status_from_flags` in `src/db/query/task_tree.rs`, the `derived_status` filter in `list_roots_derived` / `count_roots_derived` (priority: `killed > failed > partial_success > running > completed > pending`), and any new unit tests in `tests/db_test.rs`.
+- Task status exposure: `map_status()` maps internal statuses to API values. The root rollup in `list_roots::effective` aggregates them via the `has_failed` / `has_completed` flags — see the "Derived status for root tasks" section above. When adding new derived-status logic, update `derived_status_from_flags` in `src/db/query/task_tree.rs`, the `derived_status` filter in `list_roots_derived` / `count_roots_derived` (priority: `failed > partial_success > running > completed > pending`), and any new unit tests in `tests/db_test.rs`.

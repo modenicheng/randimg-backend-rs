@@ -1,0 +1,98 @@
+[package]
+name = "randimg-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "randimg_core"
+path = "src/lib.rs"
+
+[features]
+default = ["db-sqlite", "queue-postgres", "http"]
+
+# Database backend for app data (SeaORM) — mutually exclusive
+db-sqlite = ["migration/sqlite", "sea-orm/sqlx-sqlite"]
+db-postgres = ["migration/postgres", "sea-orm/sqlx-postgres"]
+
+# Queue backend (PostgreSQL only — fang async API)
+queue-postgres = ["fang/asynk-postgres"]
+
+# HTTP layer (Axum handlers, auth middleware, error types) — only needed by server binary
+http = ["dep:axum", "dep:tower-http", "dep:axum-extra"]
+
+[dependencies]
+# Web framework (optional — only for server binary)
+axum = { workspace = true, optional = true }
+tower = { workspace = true }
+tower-http = { workspace = true, optional = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Database
+sea-orm = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Auth
+jsonwebtoken = { workspace = true }
+argon2 = { workspace = true }
+axum-extra = { workspace = true, optional = true }
+
+# HTTP client (for Pixiv, OSS)
+reqwest = { workspace = true }
+
+# Migration
+migration = { workspace = true }
+
+# Image processing
+image = { workspace = true }
+
+# Config
+dotenvy = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+
+# UUID for task IDs
+uuid = { workspace = true }
+pixiv-client = { workspace = true }
+rayon = { workspace = true }
+
+# Background job queue
+fang = { workspace = true }
+ulid = { workspace = true }
+
+# DogeCloud OSS (AWS S3 compatible)
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+aws-credential-types = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
+hex = { workspace = true }
+serde_urlencoded = { workspace = true }
+anyhow = { workspace = true }
+mime_guess = { workspace = true }
+
+[[example]]
+name = "color_extract_demo"
+path = "examples/color_extract_demo.rs"
+
+[[example]]
+name = "oss_upload_demo"
+path = "examples/oss_upload_demo.rs"
+
+[dev-dependencies]
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+sea-orm = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+http-body-util = { workspace = true }
