@@ -63,7 +63,7 @@ async fn main() {
     };
     let _appender_guard = file_appender_guard;
 
-    let db = db::init_database(&config.database_url).await;
+    let db = db::init_database(&config.api_database_url).await;
 
     // Build a shared reqwest::Client with proxy and timeout.
     let mut http_builder = reqwest::Client::builder()
@@ -167,9 +167,6 @@ async fn main() {
     // Workers run in the separate randimg-worker binary — not here.
 
     // FastAPI-style startup banner
-    #[cfg(feature = "db-sqlite")]
-    let env_name = "development";
-    #[cfg(feature = "db-postgres")]
     let env_name = "production";
     let queue_name = "fang-postgres";
 
@@ -190,7 +187,7 @@ async fn main() {
          Log Dir     : {}\n\
          Routes      : {routes_list}\n\
          Starting HTTP server…",
-        env!("CARGO_PKG_VERSION"), config.database_url, config.log_level, config.log_dir,
+        env!("CARGO_PKG_VERSION"), config.api_database_url, config.log_level, config.log_dir,
     );
 
     let cors = if state.worker.config.cors_origins == "*" {
@@ -232,7 +229,7 @@ async fn main() {
             let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
             tracing::info!(
                 address = %listener.local_addr().unwrap(),
-                database = %config.database_url,
+                database = %config.api_database_url,
                 "Server started (TCP)"
             );
             axum::serve(listener, app)
@@ -249,7 +246,7 @@ async fn main() {
             let listener = tokio::net::UnixListener::bind(path).unwrap();
             tracing::info!(
                 socket = %path.display(),
-                database = %config.database_url,
+                database = %config.api_database_url,
                 "Server started (Unix socket)"
             );
             axum::serve(listener, app)

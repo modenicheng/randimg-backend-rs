@@ -9,11 +9,6 @@ impl MigrationTrait for Migration {
         let db = manager.get_connection();
 
         // ========== 1. images 新增业务字段 ==========
-        #[cfg(feature = "sqlite")]
-        db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0"
-        ).await?;
-        #[cfg(feature = "postgres")]
         db.execute_unprepared(
             "ALTER TABLE images ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT false"
         ).await?;
@@ -22,11 +17,6 @@ impl MigrationTrait for Migration {
             "ALTER TABLE images ADD COLUMN avatar_available BOOLEAN"
         ).await?;
 
-        #[cfg(feature = "sqlite")]
-        db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN source_created_at DATETIME"
-        ).await?;
-        #[cfg(feature = "postgres")]
         db.execute_unprepared(
             "ALTER TABLE images ADD COLUMN source_created_at TIMESTAMPTZ"
         ).await?;
@@ -47,11 +37,6 @@ impl MigrationTrait for Migration {
             "ALTER TABLE images ADD COLUMN fetched_times INTEGER NOT NULL DEFAULT 0"
         ).await?;
 
-        #[cfg(feature = "sqlite")]
-        db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
-        ).await?;
-        #[cfg(feature = "postgres")]
         db.execute_unprepared(
             "ALTER TABLE images ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"
         ).await?;
@@ -59,13 +44,6 @@ impl MigrationTrait for Migration {
         // ========== 2. 数据迁移：从旧字段计算 is_public ==========
         // is_public = uploaded AND processed AND accessable != 0
         // (accessable IS NULL 视为未审核，不公开；accessable = 0 视为拒绝)
-        #[cfg(feature = "sqlite")]
-        db.execute_unprepared(
-            "UPDATE images SET is_public = CASE
-                WHEN uploaded = 1 AND processed = 1 AND (accessable IS NULL OR accessable = 1)
-                THEN 1 ELSE 0 END"
-        ).await?;
-        #[cfg(feature = "postgres")]
         db.execute_unprepared(
             "UPDATE images SET is_public = CASE
                 WHEN uploaded = true AND processed = true AND (accessable IS NULL OR accessable = true)
@@ -97,50 +75,23 @@ impl MigrationTrait for Migration {
         let db = manager.get_connection();
 
         // 恢复 images 旧字段（如果之前被删除了，重新加回来）
-        #[cfg(feature = "sqlite")]
-        let _ = db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN uploaded BOOLEAN NOT NULL DEFAULT 0"
-        ).await;
-        #[cfg(feature = "postgres")]
         let _ = db.execute_unprepared(
             "ALTER TABLE images ADD COLUMN uploaded BOOLEAN NOT NULL DEFAULT false"
         ).await;
 
-        #[cfg(feature = "sqlite")]
-        let _ = db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN downloaded BOOLEAN NOT NULL DEFAULT 0"
-        ).await;
-        #[cfg(feature = "postgres")]
         let _ = db.execute_unprepared(
             "ALTER TABLE images ADD COLUMN downloaded BOOLEAN NOT NULL DEFAULT false"
         ).await;
 
-        #[cfg(feature = "sqlite")]
-        let _ = db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN processed BOOLEAN NOT NULL DEFAULT 0"
-        ).await;
-        #[cfg(feature = "postgres")]
         let _ = db.execute_unprepared(
             "ALTER TABLE images ADD COLUMN processed BOOLEAN NOT NULL DEFAULT false"
         ).await;
 
-        #[cfg(feature = "sqlite")]
-        let _ = db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN processing BOOLEAN NOT NULL DEFAULT 0"
-        ).await;
-        #[cfg(feature = "postgres")]
         let _ = db.execute_unprepared(
             "ALTER TABLE images ADD COLUMN processing BOOLEAN NOT NULL DEFAULT false"
         ).await;
 
         // 恢复旧字段数据
-        #[cfg(feature = "sqlite")]
-        db.execute_unprepared(
-            "UPDATE images SET
-                uploaded = CASE WHEN is_public = 1 THEN 1 ELSE 0 END,
-                processed = CASE WHEN is_public = 1 THEN 1 ELSE 0 END
-        ").await?;
-        #[cfg(feature = "postgres")]
         db.execute_unprepared(
             "UPDATE images SET
                 uploaded = CASE WHEN is_public = true THEN true ELSE false END,

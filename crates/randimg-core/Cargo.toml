@@ -8,10 +8,9 @@ name = "randimg_core"
 path = "src/lib.rs"
 
 [features]
-default = ["db-sqlite", "queue-postgres", "http"]
+default = ["db-postgres", "queue-postgres", "http"]
 
-# Database backend for app data (SeaORM) — mutually exclusive
-db-sqlite = ["migration/sqlite", "sea-orm/sqlx-sqlite"]
+# Database backend for app data (SeaORM) — PostgreSQL only
 db-postgres = ["migration/postgres", "sea-orm/sqlx-postgres"]
 
 # Queue backend (PostgreSQL only — fang async API)

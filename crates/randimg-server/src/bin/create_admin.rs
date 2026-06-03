@@ -17,7 +17,7 @@ async fn main() {
 
     let config = AppConfig::from_env();
 
-    let db = sea_orm::Database::connect(&config.database_url)
+    let db = sea_orm::Database::connect(&config.api_database_url)
         .await
         .expect("Failed to connect to database");
 

@@ -437,8 +437,7 @@ async fn test_pixiv_credential_update_not_found() {
 
 fn make_test_config() -> randimg_core::config::AppConfig {
     randimg_core::config::AppConfig {
-        database_url: "sqlite::memory:".into(),
-        api_database_url: "sqlite::memory:".into(),
+        api_database_url: "postgres://localhost/test_db".into(),
         queue_database_url: "postgres://localhost/test_queue".into(),
         secret_key: "test-secret".into(),
         jwt_expire_minutes: 60,
@@ -464,7 +463,6 @@ fn make_test_config() -> randimg_core::config::AppConfig {
         cors_origins: "".into(),
         color_worker_rayon_threads: 2,
         color_worker_standalone: false,
-        redis_url: "redis://127.0.0.1:6379".into(),
         task_max_retries: 3,
         task_backoff_base: 2,
         task_poll_interval_ms: 500,

@@ -6,19 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Randimg is a Rust backend that crawls images from Pixiv, extracts color palettes via KMeans clustering in CIELAB space, and serves them through an HTTP API. It uses SeaORM with SQLite (dev) / PostgreSQL (prod), Axum for the web layer, and Fang for background job processing (crawling, downloading, color extraction).
+Randimg is a Rust backend that crawls images from Pixiv, extracts color palettes via KMeans clustering in CIELAB space, and serves them through an HTTP API. It uses SeaORM with PostgreSQL, Axum for the web layer, and Fang for background job processing (crawling, downloading, color extraction).
 
 ## Build & Run
 
 ```bash
-# Default: SQLite API + PostgreSQL queue
+# Build (PostgreSQL API + PostgreSQL queue)
 cargo build
-
-# SQLite queue (no PostgreSQL required)
-cargo build --no-default-features --features db-sqlite,queue-sqlite
-
-# PostgreSQL API + PostgreSQL queue (production)
-cargo build --no-default-features --features db-postgres,queue-postgres
 
 # Run server
 cargo run -p randimg-server
@@ -27,7 +21,7 @@ cargo run -p randimg-server
 cargo run -p randimg-worker
 
 # Run tests (skip color tests — they crash machines)
-cargo test -p randimg-core --no-default-features --features db-sqlite,queue-sqlite -- --skip kmeans --skip extract_theme --skip histogram --skip palette --skip primary_color --skip lab_round
+cargo test -p randimg-core -- --skip kmeans --skip extract_theme --skip histogram --skip palette --skip primary_color --skip lab_round
 
 # Create admin user
 cargo run -p randimg-server --bin create-admin
@@ -48,14 +42,6 @@ Cargo.toml                    # Virtual workspace root
 └── migration/                # SeaORM migrations
 ```
 
-### Feature flags
-
-| Use Case | Features | Command |
-|---|---|---|
-| Dev (default) | `db-sqlite` + `queue-postgres` | `cargo build` |
-| Dev (no PostgreSQL) | `db-sqlite` + `queue-sqlite` | `cargo build --no-default-features --features db-sqlite,queue-sqlite` |
-| Production | `db-postgres` + `queue-postgres` | `cargo build --no-default-features --features db-postgres,queue-postgres` |
-
 ### State types
 
 - **`WorkerState`** (core crate): db, config, oss, http_client, queue
@@ -75,10 +61,6 @@ Uses the Fang library with async PostgreSQL backend. Database separation:
 
 - **`API_DATABASE_URL`** — SeaORM manages business data + `tasks` table for task metadata
 - **`QUEUE_DATABASE_URL`** — Fang manages task scheduling (PostgreSQL)
-
-Feature-gated queue backends:
-- `queue-postgres` (default) — `fang` with async PostgreSQL
-- `queue-sqlite` — fallback for single-machine dev (SQLite-backed queue)
 
 Seven workers, one per job type: `crawl`, `download`, `color_extract`, `upload`, `accessibility_check`, `discover`, `refresh_pixiv_token`. Jobs implement the `AsyncRunnable` trait with `#[typetag::serde]` + `#[async_trait]`. Workers are spawned via the `spawn_workers()` function in `src/lib.rs` (uses a local `spawn_worker!` macro). The backend abstraction lives in `src/db_backend.rs`.
 
@@ -191,12 +173,12 @@ All settings come from environment variables (loaded via `dotenvy`). The app pan
 
 ## Database & Migrations
 
-Migrations live in `migration/` as a path dependency and run automatically on startup. SeaORM dual-database support is gated by feature flags (`db-sqlite` / `db-postgres`) — these are mutually exclusive. Queue backends are gated by `queue-sqlite` / `queue-postgres` (also mutually exclusive). The API database and queue database are separate: `API_DATABASE_URL` for SeaORM business data, `QUEUE_DATABASE_URL` for Fang task scheduling. New migrations go in `migration/src/` with the `m{YYYYMMDD}_{seq}_{name}.rs` naming convention.
+Migrations live in `migration/` as a path dependency and run automatically on startup. The API database and queue database are separate: `API_DATABASE_URL` for SeaORM business data, `QUEUE_DATABASE_URL` for Fang task scheduling. New migrations go in `migration/src/` with the `m{YYYYMMDD}_{seq}_{name}.rs` naming convention.
 
 ## Environment Variables
 
 See `.env.example` for the full list. Critical ones:
-- `API_DATABASE_URL` — `sqlite://data/randimg.db` (dev) or PostgreSQL connection string for API database
+- `API_DATABASE_URL` — PostgreSQL connection string for API database
 - `QUEUE_DATABASE_URL` — PostgreSQL connection string for Fang queue database
 - `SECRET_KEY` — JWT signing secret (must change from default)
 - `PIXIV_REFRESH_TOKEN` — Required for Pixiv crawling

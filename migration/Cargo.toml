@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["sqlite"]
-sqlite = ["sea-orm-migration/sqlx-sqlite"]
+default = ["postgres"]
 postgres = ["sea-orm-migration/sqlx-postgres"]
 
 [dependencies]

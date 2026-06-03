@@ -21,8 +21,7 @@ use randimg_core::db_backend;
 
 fn make_test_config() -> AppConfig {
     AppConfig {
-        database_url: "sqlite::memory:".into(),
-        api_database_url: "sqlite::memory:".into(),
+        api_database_url: "postgres://localhost/test_db".into(),
         queue_database_url: "postgres://localhost/test_queue".into(),
         secret_key: "test-secret-key-for-jwt".into(),
         jwt_expire_minutes: 60,
@@ -48,7 +47,6 @@ fn make_test_config() -> AppConfig {
         cors_origins: "".into(),
         color_worker_rayon_threads: 2,
         color_worker_standalone: false,
-        redis_url: "redis://127.0.0.1:6379".into(),
         task_max_retries: 3,
         task_backoff_base: 2,
         task_poll_interval_ms: 500,

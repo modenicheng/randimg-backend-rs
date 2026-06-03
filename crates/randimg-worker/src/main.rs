@@ -35,7 +35,7 @@ async fn main() {
     );
 
     // 4. Init database (SeaORM + migrations)
-    let db = randimg_core::db::init_database(&config.database_url).await;
+    let db = randimg_core::db::init_database(&config.api_database_url).await;
     tracing::info!("Database connected and migrations applied");
 
     // 5. Build HTTP client with proxy support and 60s timeout

@@ -43,13 +43,10 @@ impl BindAddr {
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
-    /// 旧版单一数据库 URL（保留用于向后兼容）
-    pub database_url: String,
     /// API 数据库 (SeaORM) — 存储业务数据和自定义任务表
     pub api_database_url: String,
     /// 队列数据库 (Fang) — 存储 fang_tasks 表
     pub queue_database_url: String,
-    pub redis_url: String,
     pub secret_key: String,
     pub jwt_expire_minutes: u64,
     pub cdn_base_url: String,
@@ -108,19 +105,12 @@ impl AppConfig {
             panic!("SECRET_KEY must be set in environment. Do not use the default 'change-me'.");
         }
 
-        // 向后兼容：旧版 DATABASE_URL 作为 api/queue 数据库的 fallback
-        let legacy_database_url = env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "sqlite://data/randimg.db?mode=rwc".into());
-
         Self {
-            database_url: legacy_database_url.clone(),
             api_database_url: env::var("API_DATABASE_URL")
-                .unwrap_or_else(|_| legacy_database_url.clone()),
+                .unwrap_or_else(|_| "postgres://localhost/randimg".into()),
             queue_database_url: env::var("QUEUE_DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite://data/fang.db?mode=rwc".into()),
+                .unwrap_or_else(|_| "postgres://localhost/randimg_queue".into()),
             secret_key,
-            redis_url: env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
             jwt_expire_minutes: env::var("JWT_EXPIRE_MINUTES")
                 .ok()
                 .and_then(|v| v.parse().ok())

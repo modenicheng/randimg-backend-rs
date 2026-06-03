@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use crate::WorkerState;
 use crate::auth::middleware::AuthUser;
-use crate::db::entities::apalis_job;
 use crate::db::entities::task;
 use crate::db::query;
 use crate::db::query::task_tree::ChildJobNode;
@@ -444,26 +443,6 @@ pub struct RootsOrSubtasksQuery {
     pub offset: Option<u64>,
 }
 
-fn tree_row_to_json(t: &apalis_job::Model) -> serde_json::Value {
-    // Deserialize the job BLOB to extract the payload.
-    let payload = serde_json::from_slice::<serde_json::Value>(&t.job).ok();
-
-    let created_at = Some(fmt_ts(t.run_at));
-    let completed_at = t.done_at.map(fmt_ts);
-    let error_message = t.last_result.as_ref().map(|v| v.to_string());
-
-    serde_json::json!({
-        "id": t.id,
-        "task_type": t.job_type,
-        "status": map_status(&t.status),
-        "retry_count": t.attempts,
-        "created_at": created_at,
-        "completed_at": completed_at,
-        "error_message": error_message,
-        "payload": payload,
-    })
-}
-
 // ── GET /tasks/roots ────────────────────────────────────────────────────────
 
 /// GET /tasks/roots — Root tasks (jobs without a parent), with filters and pagination.
@@ -473,7 +452,7 @@ fn tree_row_to_json(t: &apalis_job::Model) -> serde_json::Value {
 /// without the noise of their subtasks.
 ///
 /// The `status` filter applies to the **derived** status (aggregated from the
-/// entire descendant subtree), not the root's own Apalis status. This means a
+/// entire descendant subtree), not the root's own status. This means a
 /// root whose own status is "Done" but has failed children will appear as
 /// `"partial_success"`.
 ///
@@ -519,7 +498,8 @@ pub async fn list_roots(
     let items: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let payload = serde_json::from_slice::<serde_json::Value>(&r.job).ok();
+            let payload = r.params.as_ref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
             let derived = query::task_tree::derived_status_from_flags(
                 r.has_active,
                 r.has_failed,
@@ -534,9 +514,9 @@ pub async fn list_roots(
             //    unsalvageable — surface `killed` even if the root itself is still
             //    retrying. This matches the user's invariant: once all descendants
             //    are definitively done with no path to success, the root's outcome
-            //    is `killed` regardless of its own Apalis status.
+            //    is `killed` regardless of its own status.
             // 2. Root-priority: when no such short-circuit applies, the root's own
-            //    Apalis status wins. Only when the root has reached `completed` do
+            //    status wins. Only when the root has reached `completed` do
             //    we consider the descendant rollup. A root with no descendants
             //    naturally falls through to `completed`.
             let root_mapped = map_status(&r.status);
@@ -555,18 +535,23 @@ pub async fn list_roots(
                 "completed"
             };
 
-            let created_at = Some(r.run_at.format("%Y-%m-%dT%H:%M:%SZ").to_string());
-            let completed_at = r.done_at.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            let created_at = r.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            let updated_at = r.updated_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            let completed_at = r.completed_at.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
             serde_json::json!({
                 "id": r.id,
-                "task_type": r.job_type,
+                "task_type": r.task_type,
                 "status": effective,
                 "raw_status": map_status(&r.status),
-                "retry_count": r.attempts,
+                "root_id": r.root_id,
+                "crawler_id": r.crawler_id,
+                "image_id": r.image_id,
+                "retry_count": r.retry_count,
                 "created_at": created_at,
+                "updated_at": updated_at,
                 "completed_at": completed_at,
-                "error_message": r.last_result,
+                "error_message": r.error_message,
                 "payload": payload,
             })
         })
@@ -792,7 +777,7 @@ pub async fn get_subtasks(
 
     let page: Vec<serde_json::Value> = children
         .into_iter()
-        .map(|j| tree_row_to_json(&j))
+        .map(|j| crate::db::query::task_tree::model_to_json(&j))
         .collect();
 
     Ok(Json(serde_json::json!({

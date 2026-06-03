@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    /// The parent task's UUID (references apalis.jobs.id).
+    /// The parent task's UUID (references tasks.id).
     pub parent_job_id: String,
-    /// The child task's UUID (references apalis.jobs.id).
+    /// The child task's UUID (references tasks.id).
     pub child_job_id: String,
     /// When this relationship was recorded.
     pub created_at: NaiveDateTime,
@@ -23,21 +23,21 @@ pub struct Model {
 pub enum Relation {
     /// Relation to the parent job.
     #[sea_orm(
-        belongs_to = "super::apalis_job::Entity",
+        belongs_to = "super::task::Entity",
         from = "Column::ParentJobId",
-        to = "super::apalis_job::Column::Id"
+        to = "super::task::Column::Id"
     )]
     ParentJob,
     /// Relation to the child job.
     #[sea_orm(
-        belongs_to = "super::apalis_job::Entity",
+        belongs_to = "super::task::Entity",
         from = "Column::ChildJobId",
-        to = "super::apalis_job::Column::Id"
+        to = "super::task::Column::Id"
     )]
     ChildJob,
 }
 
-impl Related<super::apalis_job::Entity> for Entity {
+impl Related<super::task::Entity> for Entity {
     fn to() -> RelationDef {
         // Default relation is to parent job
         Relation::ParentJob.def()

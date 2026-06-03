@@ -3,8 +3,6 @@
 //! Re-exports [`QueueBackend`] from the fang async backend and provides a
 //! convenience [`init`] function used by `lib.rs` / `main.rs` during startup.
 
-#[cfg(all(feature = "db-sqlite", feature = "db-postgres"))]
-compile_error!("Features 'db-sqlite' and 'db-postgres' are mutually exclusive. Use --no-default-features when enabling postgres.");
 
 use crate::config::AppConfig;
 pub use crate::task_queue::fang_backend::QueueBackend;

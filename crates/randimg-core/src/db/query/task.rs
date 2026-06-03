@@ -1,7 +1,7 @@
 /// 任务查询函数
 ///
 /// 提供 tasks 表的 CRUD 操作，替代 apalis_job 查询模块。
-/// 使用 SeaORM 查询构建器，支持 SQLite 和 PostgreSQL。
+/// 使用 SeaORM 查询构建器，PostgreSQL 查询。
 use crate::db::entities::task::{
     self, Entity as Task, STATUS_DONE, STATUS_FAILED, STATUS_KILLED, STATUS_PENDING, STATUS_QUEUED,
     STATUS_RUNNING,
@@ -233,38 +233,18 @@ pub async fn find_crawl_ids_by_type(
     db: &DatabaseConnection,
     crawl_type: i32,
 ) -> Result<Vec<i32>, DbErr> {
-    // params 字段存储 JSON，使用原生 SQL 解析
-    #[cfg(feature = "db-sqlite")]
-    {
-        let sql = "SELECT crawler_id FROM tasks WHERE task_type = 'crawl' AND json_extract(params, '$.crawl_type') = ? AND crawler_id IS NOT NULL";
-        let stmt = Statement::from_sql_and_values(
-            db.get_database_backend(),
-            sql,
-            [crawl_type.into()],
-        );
-        let rows = db.query_all(stmt).await?;
-        let mut ids = Vec::with_capacity(rows.len());
-        for row in &rows {
-            ids.push(row.try_get_by_index::<i32>(0)?);
-        }
-        Ok(ids)
+    let sql = "SELECT crawler_id FROM tasks WHERE task_type = 'crawl' AND (params::json->>'crawl_type')::int = $1 AND crawler_id IS NOT NULL";
+    let stmt = Statement::from_sql_and_values(
+        db.get_database_backend(),
+        sql,
+        [crawl_type.into()],
+    );
+    let rows = db.query_all(stmt).await?;
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in &rows {
+        ids.push(row.try_get_by_index::<i32>(0)?);
     }
-
-    #[cfg(feature = "db-postgres")]
-    {
-        let sql = "SELECT crawler_id FROM tasks WHERE task_type = 'crawl' AND (params::json->>'crawl_type')::int = $1 AND crawler_id IS NOT NULL";
-        let stmt = Statement::from_sql_and_values(
-            db.get_database_backend(),
-            sql,
-            [crawl_type.into()],
-        );
-        let rows = db.query_all(stmt).await?;
-        let mut ids = Vec::with_capacity(rows.len());
-        for row in &rows {
-            ids.push(row.try_get_by_index::<i32>(0)?);
-        }
-        Ok(ids)
-    }
+    Ok(ids)
 }
 
 /// 更新任务状态

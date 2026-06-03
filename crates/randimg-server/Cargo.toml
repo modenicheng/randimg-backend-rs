@@ -29,8 +29,7 @@ migration = { workspace = true }
 sea-orm = { workspace = true }
 
 [features]
-default = ["db-sqlite", "queue-postgres", "http"]
-db-sqlite = ["randimg-core/db-sqlite"]
+default = ["db-postgres", "queue-postgres", "http"]
 db-postgres = ["randimg-core/db-postgres"]
 queue-postgres = ["randimg-core/queue-postgres"]
 http = ["randimg-core/http"]
