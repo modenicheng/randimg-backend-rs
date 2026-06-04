@@ -138,7 +138,7 @@ fn test_kmeans_basic_clustering() {
 
 #[test]
 fn test_kmeans_empty_input() {
-    let data: Vec<[f64; 3]> = vec![];
+    let data: Vec<[f32; 3]> = vec![];
     let centroids = kmeans(&data, 3, 10, None);
     assert!(centroids.is_empty());
 }
@@ -227,7 +227,7 @@ fn test_kmeans_mini_batch() {
 
 #[test]
 fn test_kmeans_produces_correct_k() {
-    let data: Vec<[f64; 3]> = (0..100).map(|i| [i as f64, 0.0, 0.0]).collect();
+    let data: Vec<[f32; 3]> = (0..100).map(|i| [i as f32, 0.0, 0.0]).collect();
 
     for k in [1, 3, 5, 10] {
         let centroids = kmeans(&data, k, 20, None);
@@ -307,7 +307,7 @@ fn perceived_brightness(c: [u8; 3]) -> u32 {
     (c[0] as u32 * 299 + c[1] as u32 * 587 + c[2] as u32 * 114) / 1000
 }
 
-fn euclidean_sq_arr(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+fn euclidean_sq_arr(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     let dx = a[0] - b[0];
     let dy = a[1] - b[1];
     let dz = a[2] - b[2];

@@ -8,11 +8,11 @@ use rayon::prelude::*;
 /// - `batch_size`: if Some(n), use mini-batch KMeans with n samples per iteration;
 ///   if None, use full-batch KMeans
 pub fn kmeans(
-    data: &[[f64; 3]],
+    data: &[[f32; 3]],
     k: usize,
     max_iter: usize,
     batch_size: Option<usize>,
-) -> Vec<[f64; 3]> {
+) -> Vec<[f32; 3]> {
     if data.is_empty() || k == 0 {
         return vec![];
     }
@@ -39,13 +39,13 @@ pub fn kmeans(
 }
 
 /// KMeans++ initialization: pick centroids proportional to squared distance from nearest existing centroid.
-fn kmeans_pp_init(data: &[[f64; 3]], k: usize) -> Vec<[f64; 3]> {
+fn kmeans_pp_init(data: &[[f32; 3]], k: usize) -> Vec<[f32; 3]> {
     // Use deterministic seed: pick the point closest to the dataset centroid
     let mean = par_mean(data);
     let seed_idx = data
         .par_iter()
         .enumerate()
-        .map(|(i, p)| (i, euclidean_sq(p, &mean)))
+        .map(|(i, p)| (i, hyab_dist(p, &mean)))
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i)
         .unwrap_or(0);
@@ -73,7 +73,7 @@ fn kmeans_pp_init(data: &[[f64; 3]], k: usize) -> Vec<[f64; 3]> {
             .par_iter_mut()
             .zip(data.par_iter())
             .for_each(|(md, point)| {
-                let d = euclidean_sq(point, new_centroid);
+                let d = hyab_dist(point, new_centroid);
                 if d < *md {
                     *md = d;
                 }
@@ -85,8 +85,8 @@ fn kmeans_pp_init(data: &[[f64; 3]], k: usize) -> Vec<[f64; 3]> {
 
 /// Full-batch KMeans with rayon parallelism.
 fn full_batch(
-    data: &[[f64; 3]],
-    centroids: &mut Vec<[f64; 3]>,
+    data: &[[f32; 3]],
+    centroids: &mut Vec<[f32; 3]>,
     assignments: &mut [usize],
     k: usize,
     max_iter: usize,
@@ -123,8 +123,8 @@ fn full_batch(
 
 /// Mini-batch KMeans: sample a batch per iteration for faster convergence.
 fn mini_batch(
-    data: &[[f64; 3]],
-    centroids: &mut Vec<[f64; 3]>,
+    data: &[[f32; 3]],
+    centroids: &mut Vec<[f32; 3]>,
     assignments: &mut [usize],
     k: usize,
     max_iter: usize,
@@ -166,7 +166,7 @@ fn mini_batch(
         for &idx in &batch_indices {
             let c = assignments[idx];
             centroid_counts[c] += 1;
-            let eta = 1.0 / centroid_counts[c] as f64;
+            let eta = 1.0f32 / centroid_counts[c] as f32;
             centroids[c][0] += eta * (data[idx][0] - centroids[c][0]);
             centroids[c][1] += eta * (data[idx][1] - centroids[c][1]);
             centroids[c][2] += eta * (data[idx][2] - centroids[c][2]);
@@ -187,27 +187,26 @@ fn mini_batch(
         });
 }
 
-/// Find the index of the nearest centroid to a point.
 #[inline]
-fn nearest_centroid(point: &[f64; 3], centroids: &[[f64; 3]]) -> usize {
-    centroids
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            euclidean_sq(point, a)
-                .partial_cmp(&euclidean_sq(point, b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|(i, _)| i)
-        .unwrap_or(0)
+fn nearest_centroid(point: &[f32; 3], centroids: &[[f32; 3]]) -> usize {
+    let mut min_dist = f32::MAX;
+    let mut min_idx = 0;
+    for (i, c) in centroids.iter().enumerate() {
+        let dist = hyab_dist(point, c);
+        if dist < min_dist {
+            min_dist = dist;
+            min_idx = i;
+        }
+    }
+    min_idx
 }
 
 /// Parallel mean of all points.
-fn par_mean(data: &[[f64; 3]]) -> [f64; 3] {
+fn par_mean(data: &[[f32; 3]]) -> [f32; 3] {
     let (sum, count) = data
         .par_iter()
         .fold(
-            || ([0.0f64; 3], 0usize),
+            || ([0.0f32; 3], 0usize),
             |(mut s, c), p| {
                 s[0] += p[0];
                 s[1] += p[1];
@@ -216,7 +215,7 @@ fn par_mean(data: &[[f64; 3]]) -> [f64; 3] {
             },
         )
         .reduce(
-            || ([0.0f64; 3], 0usize),
+            || ([0.0f32; 3], 0usize),
             |(mut s1, c1), (s2, c2)| {
                 s1[0] += s2[0];
                 s1[1] += s2[1];
@@ -226,35 +225,35 @@ fn par_mean(data: &[[f64; 3]]) -> [f64; 3] {
         );
 
     if count > 0 {
-        let n = count as f64;
+        let n = count as f32;
         [sum[0] / n, sum[1] / n, sum[2] / n]
     } else {
-        [0.0; 3]
+        [0.0f32; 3]
     }
 }
 
 /// Parallel min squared distance from each point to the nearest centroid.
-fn par_min_dists(data: &[[f64; 3]], centroids: &[[f64; 3]]) -> Vec<f64> {
+fn par_min_dists(data: &[[f32; 3]], centroids: &[[f32; 3]]) -> Vec<f32> {
     data.par_iter()
         .map(|p| {
             centroids
                 .iter()
-                .map(|c| euclidean_sq(p, c))
-                .fold(f64::MAX, f64::min)
+                .map(|c| hyab_dist(p, c))
+                .fold(f32::MAX, f32::min)
         })
         .collect()
 }
 
 /// Parallel accumulation of sums and counts per cluster.
 fn par_accumulate(
-    data: &[[f64; 3]],
+    data: &[[f32; 3]],
     assignments: &[usize],
     k: usize,
-) -> (Vec<[f64; 3]>, Vec<usize>) {
+) -> (Vec<[f32; 3]>, Vec<usize>) {
     data.par_iter()
         .zip(assignments.par_iter())
         .fold(
-            || (vec![[0.0f64; 3]; k], vec![0usize; k]),
+            || (vec![[0.0f32; 3]; k], vec![0usize; k]),
             |(mut sums, mut counts), (point, &c)| {
                 sums[c][0] += point[0];
                 sums[c][1] += point[1];
@@ -264,7 +263,7 @@ fn par_accumulate(
             },
         )
         .reduce(
-            || (vec![[0.0f64; 3]; k], vec![0usize; k]),
+            || (vec![[0.0f32; 3]; k], vec![0usize; k]),
             |(mut sums1, mut counts1), (sums2, counts2)| {
                 for j in 0..k {
                     sums1[j][0] += sums2[j][0];
@@ -279,15 +278,15 @@ fn par_accumulate(
 
 /// Update centroids from accumulated sums/counts; reinitialize empty clusters.
 fn update_centroids(
-    centroids: &mut Vec<[f64; 3]>,
-    sums: &[[f64; 3]],
+    centroids: &mut Vec<[f32; 3]>,
+    sums: &[[f32; 3]],
     counts: &[usize],
-    data: &[[f64; 3]],
+    data: &[[f32; 3]],
     assignments: &[usize],
 ) {
     for j in 0..centroids.len() {
         if counts[j] > 0 {
-            let n = counts[j] as f64;
+            let n = counts[j] as f32;
             centroids[j] = [sums[j][0] / n, sums[j][1] / n, sums[j][2] / n];
         }
     }
@@ -301,9 +300,9 @@ fn update_centroids(
 
 /// Reinitialize empty centroids to the farthest point from any existing centroid.
 fn reinitialize_empty_centroids(
-    centroids: &mut Vec<[f64; 3]>,
+    centroids: &mut Vec<[f32; 3]>,
     counts: &[u64],
-    data: &[[f64; 3]],
+    data: &[[f32; 3]],
     assignments: &[usize],
 ) {
     for j in 0..centroids.len() {
@@ -314,7 +313,7 @@ fn reinitialize_empty_centroids(
                 .par_iter()
                 .zip(assignments.par_iter())
                 .enumerate()
-                .map(|(i, (point, &c))| (i, euclidean_sq(point, &centroids[c])))
+                .map(|(i, (point, &c))| (i, hyab_dist(point, &centroids[c])))
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(i, _)| i)
                 .unwrap_or(0);
@@ -325,9 +324,20 @@ fn reinitialize_empty_centroids(
 
 /// Squared Euclidean distance between two 3D points.
 #[inline]
-fn euclidean_sq(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+fn euclidean_sq(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     let dx = a[0] - b[0];
     let dy = a[1] - b[1];
     let dz = a[2] - b[2];
     dx * dx + dy * dy + dz * dz
+}
+
+/// HyAB distance metric for CIELAB color space.
+/// Better than Euclidean for large color differences (palette extraction).
+/// Treats lightness (L*) as separable from chromaticity (a*, b*).
+#[inline]
+fn hyab_dist(a: &[f32; 3], b: &[f32; 3]) -> f32 {
+    let dl = (a[0] - b[0]).abs();
+    let da = a[1] - b[1];
+    let db = a[2] - b[2];
+    dl + (da * da + db * db).sqrt()
 }

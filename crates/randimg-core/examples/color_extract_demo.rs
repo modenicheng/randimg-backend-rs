@@ -73,9 +73,9 @@ fn main() {
     let pixels: Vec<[u8; 3]> = rgb.pixels().map(|p| [p[0], p[1], p[2]]).collect();
 
     let t1 = Instant::now();
-    let lab_pixels: Vec<[f64; 3]> = pixels
+    let lab_pixels: Vec<[f32; 3]> = pixels
         .iter()
-        .map(|p| rgb_to_lab_fn(p[0], p[1], p[2]))
+        .map(|p| randimg_core::color::rgb_to_lab(p[0], p[1], p[2]))
         .collect();
     let lab_elapsed = t1.elapsed();
     println!(

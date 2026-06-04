@@ -377,6 +377,27 @@ async fn save_illust(
         }
     }
 
+    // Filter out deleted/unviewable images (Pixiv marks these with visible=false)
+    if illust.visible == Some(false) {
+        tracing::debug!("Skipping unviewable illust {} (visible=false)", illust.id);
+        return Ok(Vec::new());
+    }
+
+    // Filter out placeholder images (deleted, restricted, sanity-level blocked)
+    if let Some((first_url, _)) = get_image_pages(illust).first() {
+        if first_url.contains("limit_unknown")
+            || first_url.contains("limit_unviewable")
+            || first_url.contains("limit_sanity_level")
+        {
+            tracing::debug!(
+                "Skipping placeholder illust {} (url={})",
+                illust.id,
+                first_url
+            );
+            return Ok(Vec::new());
+        }
+    }
+
     let db = &state.db;
     let mut downloads = Vec::new();
 
@@ -812,9 +833,9 @@ pub async fn handle_color_extract(job: ColorExtractJob, state: &Arc<WorkerState>
     {
         let mut active: image::ActiveModel = img_model.into();
         active.colors = Set(Some(serde_json::to_value(&colors).unwrap()));
-        active.primary_l = Set(Some(colors.primary_lab[0]));
-        active.primary_a = Set(Some(colors.primary_lab[1]));
-        active.primary_b = Set(Some(colors.primary_lab[2]));
+        active.primary_l = Set(Some(colors.primary_lab[0] as f64));
+        active.primary_a = Set(Some(colors.primary_lab[1] as f64));
+        active.primary_b = Set(Some(colors.primary_lab[2] as f64));
         active.update(&state.db).await.map_err(|e| e.to_string())?;
     }
 
@@ -840,9 +861,9 @@ pub async fn handle_color_extract(job: ColorExtractJob, state: &Arc<WorkerState>
             rgb_r: Set(rgb[0] as i32),
             rgb_g: Set(rgb[1] as i32),
             rgb_b: Set(rgb[2] as i32),
-            lab_l: Set(lab[0]),
-            lab_a: Set(lab[1]),
-            lab_b: Set(lab[2]),
+            lab_l: Set(lab[0] as f64),
+            lab_a: Set(lab[1] as f64),
+            lab_b: Set(lab[2] as f64),
         };
         entry
             .insert(&state.db)

@@ -317,7 +317,8 @@ pub async fn color_search(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     // Convert RGB to LAB if provided, otherwise use LAB directly
     let lab = if let (Some(r), Some(g), Some(b)) = (query.r, query.g, query.b) {
-        crate::color::rgb_to_lab(r, g, b)
+        let lab = crate::color::rgb_to_lab(r, g, b);
+        [lab[0] as f64, lab[1] as f64, lab[2] as f64]
     } else if let (Some(l), Some(a), Some(b_lab)) = (query.l, query.a, query.b_lab) {
         [l, a, b_lab]
     } else {

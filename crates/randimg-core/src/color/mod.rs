@@ -49,15 +49,15 @@ where
 #[derive(Serialize)]
 pub struct ColorEntry {
     pub rgb: [u8; 3],
-    pub lab: [f64; 3],
+    pub lab: [f32; 3],
 }
 
 #[derive(Serialize)]
 pub struct ThemeColors {
     pub primary_color: [u8; 3],
-    pub primary_lab: [f64; 3],
+    pub primary_lab: [f32; 3],
     pub colors: Vec<[u8; 3]>,
-    pub colors_lab: Vec<[f64; 3]>,
+    pub colors_lab: Vec<[f32; 3]>,
 }
 
 /// Quantize a channel value into bins (e.g., 16 levels)
@@ -147,7 +147,9 @@ static SRGB_TO_LINEAR: LazyLock<[f64; 256]> = LazyLock::new(srgb_to_linear_lut);
 static LINEAR_TO_SRGB: LazyLock<[f64; 4096]> = LazyLock::new(linear_to_srgb_lut);
 
 /// Convert sRGB [0,255] to CIELAB [L, a, b] using precomputed LUT.
-pub fn rgb_to_lab(r: u8, g: u8, b: u8) -> [f64; 3] {
+///
+/// LUTs remain f64 for conversion precision; result converted to f32 at the boundary.
+pub fn rgb_to_lab(r: u8, g: u8, b: u8) -> [f32; 3] {
     let r_lin = SRGB_TO_LINEAR[r as usize];
     let g_lin = SRGB_TO_LINEAR[g as usize];
     let b_lin = SRGB_TO_LINEAR[b as usize];
@@ -171,11 +173,21 @@ pub fn rgb_to_lab(r: u8, g: u8, b: u8) -> [f64; 3] {
     let fy = f(y);
     let fz = f(z / 1.08883);
 
-    [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
+    let l = 116.0 * fy - 16.0;
+    let a = 500.0 * (fx - fy);
+    let b_val = 200.0 * (fy - fz);
+
+    [l as f32, a as f32, b_val as f32]
 }
 
 /// Convert CIELAB to sRGB [0,255] using precomputed LUT.
-fn lab_to_rgb(l: f64, a: f64, b: f64) -> [u8; 3] {
+///
+/// Accepts f32 inputs (from kmeans/extract_theme_colors), converts to f64 internally
+/// for LUT indexing precision.
+fn lab_to_rgb(l: f32, a: f32, b: f32) -> [u8; 3] {
+    let l = l as f64;
+    let a = a as f64;
+    let b = b as f64;
     let fy = (l + 16.0) / 116.0;
     let fx = a / 500.0 + fy;
     let fz = fy - b / 200.0;
@@ -231,9 +243,9 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
         if pixels.is_empty() {
             return ThemeColors {
                 primary_color: [0, 0, 0],
-                primary_lab: [0.0; 3],
+                primary_lab: [0.0f32; 3],
                 colors: vec![[0, 0, 0]; 10],
-                colors_lab: vec![[0.0; 3]; 10],
+                colors_lab: vec![[0.0f32; 3]; 10],
             };
         }
 
@@ -242,7 +254,7 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
         let primary_lab = rgb_to_lab(primary_color[0], primary_color[1], primary_color[2]);
 
         // Convert to LAB for clustering (parallel on dedicated pool)
-        let lab_pixels: Vec<[f64; 3]> = pixels
+        let lab_pixels: Vec<[f32; 3]> = pixels
             .par_iter()
             .map(|p| rgb_to_lab(p[0], p[1], p[2]))
             .collect();
@@ -255,7 +267,7 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
         sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
 
         // Keep LAB centroids for storage, also convert to RGB
-        let colors_lab: Vec<[f64; 3]> = sorted_lab.clone();
+        let colors_lab: Vec<[f32; 3]> = sorted_lab.clone();
         let colors: Vec<[u8; 3]> = sorted_lab
             .into_iter()
             .map(|c| lab_to_rgb(c[0], c[1], c[2]))
