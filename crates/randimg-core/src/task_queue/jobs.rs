@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::WorkerState;
+use crate::db::entities::task;
+use crate::db::query;
 use super::handlers;
 
 // ── Global WorkerState accessor ────────────────────────────────
@@ -74,6 +76,9 @@ pub struct CrawlJob {
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
+    /// Custom task ID for status tracking
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 /// Download a single image from Pixiv to local disk.
@@ -91,6 +96,9 @@ pub struct DownloadJob {
     /// represented as direct children of the crawl task.
     #[serde(default)]
     pub root_job_id: Option<String>,
+    /// Custom task ID for status tracking
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 /// Extract color palette from a downloaded image.
@@ -101,6 +109,9 @@ pub struct ColorExtractJob {
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
+    /// Custom task ID for status tracking
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 /// Upload a downloaded image to DogeCloud OSS.
@@ -111,6 +122,9 @@ pub struct UploadJob {
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
+    /// Custom task ID for status tracking
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 /// Check image accessibility (solid-color detection stub).
@@ -121,6 +135,9 @@ pub struct AccessibilityCheckJob {
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
+    /// Custom task ID for status tracking
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 /// Discover related illustrations via Pixiv related-illust API.
@@ -133,6 +150,9 @@ pub struct DiscoverJob {
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
+    /// Custom task ID for status tracking
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 /// Refresh a Pixiv credential's OAuth token.
@@ -142,6 +162,9 @@ pub struct RefreshPixivTokenJob {
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
+    /// Custom task ID for status tracking
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 // ── AsyncRunnable implementations ──────────────────────────────
@@ -150,9 +173,37 @@ pub struct RefreshPixivTokenJob {
 #[async_trait]
 impl AsyncRunnable for CrawlJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        tracing::info!(crawler_id = self.crawler_id, crawl_type = self.crawl_type, "CrawlJob started");
         let state = worker_state();
+
+        // Update status to running
+        if let Some(ref task_id) = self.task_id {
+            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                tracing::error!(task_id, error = %e, "Failed to update task status to running");
+            }
+        }
+
+        tracing::info!(crawler_id = self.crawler_id, crawl_type = self.crawl_type, "CrawlJob started");
         let result = handlers::handle_crawl(self.clone(), state).await;
+
+        // Update status based on result
+        if let Some(ref task_id) = self.task_id {
+            match &result {
+                Ok(()) => {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
+                    }
+                }
+                Err(e) => {
+                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
+                    }
+                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
+                    }
+                }
+            }
+        }
+
         match &result {
             Ok(()) => tracing::info!(crawler_id = self.crawler_id, "CrawlJob completed"),
             Err(e) => tracing::error!(crawler_id = self.crawler_id, error = %e, "CrawlJob failed"),
@@ -177,9 +228,37 @@ impl AsyncRunnable for CrawlJob {
 #[async_trait]
 impl AsyncRunnable for DownloadJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        tracing::info!(image_id = self.image_id, path = %self.image_path, "DownloadJob started");
         let state = worker_state();
+
+        // Update status to running
+        if let Some(ref task_id) = self.task_id {
+            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                tracing::error!(task_id, error = %e, "Failed to update task status to running");
+            }
+        }
+
+        tracing::info!(image_id = self.image_id, path = %self.image_path, "DownloadJob started");
         let result = handlers::handle_download(self.clone(), state).await;
+
+        // Update status based on result
+        if let Some(ref task_id) = self.task_id {
+            match &result {
+                Ok(()) => {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
+                    }
+                }
+                Err(e) => {
+                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
+                    }
+                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
+                    }
+                }
+            }
+        }
+
         match &result {
             Ok(()) => tracing::info!(image_id = self.image_id, "DownloadJob completed"),
             Err(e) => tracing::error!(image_id = self.image_id, error = %e, "DownloadJob failed"),
@@ -204,9 +283,37 @@ impl AsyncRunnable for DownloadJob {
 #[async_trait]
 impl AsyncRunnable for ColorExtractJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        tracing::info!(image_id = self.image_id, path = %self.image_path, "ColorExtractJob started");
         let state = worker_state();
+
+        // Update status to running
+        if let Some(ref task_id) = self.task_id {
+            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                tracing::error!(task_id, error = %e, "Failed to update task status to running");
+            }
+        }
+
+        tracing::info!(image_id = self.image_id, path = %self.image_path, "ColorExtractJob started");
         let result = handlers::handle_color_extract(self.clone(), state).await;
+
+        // Update status based on result
+        if let Some(ref task_id) = self.task_id {
+            match &result {
+                Ok(()) => {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
+                    }
+                }
+                Err(e) => {
+                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
+                    }
+                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
+                    }
+                }
+            }
+        }
+
         match &result {
             Ok(()) => tracing::info!(image_id = self.image_id, "ColorExtractJob completed"),
             Err(e) => tracing::error!(image_id = self.image_id, error = %e, "ColorExtractJob failed"),
@@ -231,9 +338,37 @@ impl AsyncRunnable for ColorExtractJob {
 #[async_trait]
 impl AsyncRunnable for UploadJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        tracing::info!(image_id = self.image_id, path = %self.image_path, "UploadJob started");
         let state = worker_state();
+
+        // Update status to running
+        if let Some(ref task_id) = self.task_id {
+            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                tracing::error!(task_id, error = %e, "Failed to update task status to running");
+            }
+        }
+
+        tracing::info!(image_id = self.image_id, path = %self.image_path, "UploadJob started");
         let result = handlers::handle_upload(self.clone(), state).await;
+
+        // Update status based on result
+        if let Some(ref task_id) = self.task_id {
+            match &result {
+                Ok(()) => {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
+                    }
+                }
+                Err(e) => {
+                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
+                    }
+                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
+                    }
+                }
+            }
+        }
+
         match &result {
             Ok(()) => tracing::info!(image_id = self.image_id, "UploadJob completed"),
             Err(e) => tracing::error!(image_id = self.image_id, error = %e, "UploadJob failed"),
@@ -258,9 +393,37 @@ impl AsyncRunnable for UploadJob {
 #[async_trait]
 impl AsyncRunnable for AccessibilityCheckJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        tracing::info!(image_id = self.image_id, path = %self.image_path, "AccessibilityCheckJob started");
         let state = worker_state();
+
+        // Update status to running
+        if let Some(ref task_id) = self.task_id {
+            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                tracing::error!(task_id, error = %e, "Failed to update task status to running");
+            }
+        }
+
+        tracing::info!(image_id = self.image_id, path = %self.image_path, "AccessibilityCheckJob started");
         let result = handlers::handle_accessibility_check(self.clone(), state).await;
+
+        // Update status based on result
+        if let Some(ref task_id) = self.task_id {
+            match &result {
+                Ok(()) => {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
+                    }
+                }
+                Err(e) => {
+                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
+                    }
+                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
+                    }
+                }
+            }
+        }
+
         match &result {
             Ok(()) => tracing::info!(image_id = self.image_id, "AccessibilityCheckJob completed"),
             Err(e) => tracing::error!(image_id = self.image_id, error = %e, "AccessibilityCheckJob failed"),
@@ -285,9 +448,37 @@ impl AsyncRunnable for AccessibilityCheckJob {
 #[async_trait]
 impl AsyncRunnable for DiscoverJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        tracing::info!(hop = self.hop, "DiscoverJob started");
         let state = worker_state();
+
+        // Update status to running
+        if let Some(ref task_id) = self.task_id {
+            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                tracing::error!(task_id, error = %e, "Failed to update task status to running");
+            }
+        }
+
+        tracing::info!(hop = self.hop, "DiscoverJob started");
         let result = handlers::handle_discover(self.clone(), state).await;
+
+        // Update status based on result
+        if let Some(ref task_id) = self.task_id {
+            match &result {
+                Ok(()) => {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
+                    }
+                }
+                Err(e) => {
+                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
+                    }
+                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
+                    }
+                }
+            }
+        }
+
         match &result {
             Ok(()) => tracing::info!(hop = self.hop, "DiscoverJob completed"),
             Err(e) => tracing::error!(hop = self.hop, error = %e, "DiscoverJob failed"),
@@ -312,9 +503,37 @@ impl AsyncRunnable for DiscoverJob {
 #[async_trait]
 impl AsyncRunnable for RefreshPixivTokenJob {
     async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        tracing::info!(credential_id = self.credential_id, "RefreshPixivTokenJob started");
         let state = worker_state();
+
+        // Update status to running
+        if let Some(ref task_id) = self.task_id {
+            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                tracing::error!(task_id, error = %e, "Failed to update task status to running");
+            }
+        }
+
+        tracing::info!(credential_id = self.credential_id, "RefreshPixivTokenJob started");
         let result = handlers::handle_refresh_pixiv_token(self.clone(), state).await;
+
+        // Update status based on result
+        if let Some(ref task_id) = self.task_id {
+            match &result {
+                Ok(()) => {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
+                    }
+                }
+                Err(e) => {
+                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
+                    }
+                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
+                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
+                    }
+                }
+            }
+        }
+
         match &result {
             Ok(()) => tracing::info!(credential_id = self.credential_id, "RefreshPixivTokenJob completed"),
             Err(e) => tracing::error!(credential_id = self.credential_id, error = %e, "RefreshPixivTokenJob failed"),

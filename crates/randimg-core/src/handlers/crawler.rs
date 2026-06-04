@@ -14,6 +14,7 @@ use crate::db::entities::image::{self, Entity as Image};
 use crate::db::query;
 use crate::error::AppError;
 use crate::task_queue::jobs::*;
+use uuid::Uuid;
 
 pub fn routes() -> Router<Arc<WorkerState>> {
     Router::new()
@@ -88,6 +89,7 @@ pub async fn create_crawler(
     .map_err(AppError::from)?;
 
     // Submit crawl task to fang job queue
+    let task_id = Uuid::new_v4().to_string();
     let crawl_job = CrawlJob {
         crawler_id: crawler.id,
         crawl_type,
@@ -106,6 +108,7 @@ pub async fn create_crawler(
         discover_seed_method: body.discover_seed_method,
         disable_discover: body.disable_discover,
         parent_job_id: None,
+        task_id: Some(task_id.clone()),
     };
     state
         .queue_backend
@@ -118,6 +121,7 @@ pub async fn create_crawler(
             None,
             Some(crawler.id),
             None,
+            Some(&task_id),
         )
         .await
         .map_err(|e| AppError::Internal(e))?;
@@ -176,10 +180,12 @@ pub async fn get_crawler_image(
 
         let count = images.len();
         for img in images {
+            let task_id = Uuid::new_v4().to_string();
             let color_job = ColorExtractJob {
                 image_id: img.id,
                 image_path: img.image_path,
                 parent_job_id: None,
+                task_id: Some(task_id.clone()),
             };
             state
                 .queue_backend
@@ -192,6 +198,7 @@ pub async fn get_crawler_image(
                     None,
                     None,
                     Some(img.id),
+                    Some(&task_id),
                 )
                 .await
                 .map_err(|e| AppError::Internal(e))?;
@@ -222,12 +229,14 @@ pub async fn trigger_discover(
     _auth: AuthUser,
     Json(body): Json<DiscoverRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let task_id = Uuid::new_v4().to_string();
     let discover_job = DiscoverJob {
         hop: 0,
         max_hops: body.max_hops,
         seed_limit: body.seed_limit,
         seed_method: body.seed_method,
         parent_job_id: None,
+        task_id: Some(task_id.clone()),
     };
     state
         .queue_backend
@@ -240,6 +249,7 @@ pub async fn trigger_discover(
             None,
             None,
             None,
+            Some(&task_id),
         )
         .await
         .map_err(|e| AppError::Internal(e))?;
@@ -267,10 +277,12 @@ pub async fn get_accessibility_queue(
 
         let count = images.len();
         for img in images {
+            let task_id = Uuid::new_v4().to_string();
             let a11y_job = AccessibilityCheckJob {
                 image_id: img.id,
                 image_path: img.image_path,
                 parent_job_id: None,
+                task_id: Some(task_id.clone()),
             };
             state
                 .queue_backend
@@ -283,6 +295,7 @@ pub async fn get_accessibility_queue(
                     None,
                     None,
                     Some(img.id),
+                    Some(&task_id),
                 )
                 .await
                 .map_err(|e| AppError::Internal(e))?;

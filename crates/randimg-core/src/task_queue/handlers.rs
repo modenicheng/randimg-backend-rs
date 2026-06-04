@@ -57,18 +57,20 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
             if job.disable_discover.unwrap_or(false) {
                 tracing::info!(crawler_id, "Discover disabled for this crawl job, skipping");
             } else {
+            let discover_task_id = uuid::Uuid::new_v4().to_string();
             let discover_job = DiscoverJob {
                 hop: 0,
                 max_hops: job.discover_hops,
                 seed_limit: job.discover_seed_limit,
                 seed_method: job.discover_seed_method.clone(),
                 parent_job_id: Some(current_id.clone()),
+                task_id: Some(discover_task_id.clone()),
             };
             let metadata = serde_json::to_value(&discover_job)
                 .map_err(|e| format!("Failed to serialize discover job: {}", e))?;
             if let Err(e) = state
                 .queue_backend
-                .push_task(&discover_job, "discover", metadata, &state.db, Some(&current_id), Some(&current_id), None, None)
+                .push_task(&discover_job, "discover", metadata, &state.db, Some(&current_id), Some(&current_id), None, None, Some(&discover_task_id))
                 .await
             {
                 tracing::error!("Failed to submit discover task after crawl: {}", e);
@@ -122,18 +124,20 @@ async fn crawl_ranking(
         for illust in &illusts {
             let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
+                let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
                     image_id: dl.image_id,
                     source_image_url: dl.source_image_url,
                     image_path: dl.image_path,
                     parent_job_id: Some(parent_id.to_string()),
                     root_job_id: Some(parent_id.to_string()),
+                    task_id: Some(download_task_id.clone()),
                 };
                 let metadata = serde_json::to_value(&download_job)
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
                 state
                     .queue_backend
-                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id))
+                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id), Some(&download_task_id))
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }
@@ -198,18 +202,20 @@ async fn crawl_user(
         for illust in &illusts {
             let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
+                let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
                     image_id: dl.image_id,
                     source_image_url: dl.source_image_url,
                     image_path: dl.image_path,
                     parent_job_id: Some(parent_id.to_string()),
                     root_job_id: Some(parent_id.to_string()),
+                    task_id: Some(download_task_id.clone()),
                 };
                 let metadata = serde_json::to_value(&download_job)
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
                 state
                     .queue_backend
-                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id))
+                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id), Some(&download_task_id))
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }
@@ -272,18 +278,20 @@ async fn crawl_bookmarks(
         for illust in &illusts {
             let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
+                let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
                     image_id: dl.image_id,
                     source_image_url: dl.source_image_url,
                     image_path: dl.image_path,
                     parent_job_id: Some(parent_id.to_string()),
                     root_job_id: Some(parent_id.to_string()),
+                    task_id: Some(download_task_id.clone()),
                 };
                 let metadata = serde_json::to_value(&download_job)
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
                 state
                     .queue_backend
-                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id))
+                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id), Some(&download_task_id))
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }
@@ -540,35 +548,41 @@ async fn spawn_downstream_children(
 ) {
     let upstream_id = job.root_job_id.as_deref().unwrap_or(current_id);
 
+    let color_task_id = uuid::Uuid::new_v4().to_string();
     let color_job = ColorExtractJob {
         image_id: job.image_id,
         image_path: job.image_path.clone(),
         parent_job_id: Some(upstream_id.to_string()),
+        task_id: Some(color_task_id.clone()),
     };
     let color_metadata = serde_json::to_value(&color_job).unwrap();
 
+    let upload_task_id = uuid::Uuid::new_v4().to_string();
     let upload_job = UploadJob {
         image_id: job.image_id,
         image_path: job.image_path.clone(),
         parent_job_id: Some(upstream_id.to_string()),
+        task_id: Some(upload_task_id.clone()),
     };
     let upload_metadata = serde_json::to_value(&upload_job).unwrap();
 
+    let a11y_task_id = uuid::Uuid::new_v4().to_string();
     let a11y_job = AccessibilityCheckJob {
         image_id: job.image_id,
         image_path: job.image_path.clone(),
         parent_job_id: Some(upstream_id.to_string()),
+        task_id: Some(a11y_task_id.clone()),
     };
     let a11y_metadata = serde_json::to_value(&a11y_job).unwrap();
 
     let color_fut = state.queue_backend.push_task(
-        &color_job, "color_extract", color_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id),
+        &color_job, "color_extract", color_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id), Some(&color_task_id),
     );
     let upload_fut = state.queue_backend.push_task(
-        &upload_job, "upload", upload_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id),
+        &upload_job, "upload", upload_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id), Some(&upload_task_id),
     );
     let a11y_fut = state.queue_backend.push_task(
-        &a11y_job, "accessibility_check", a11y_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id),
+        &a11y_job, "accessibility_check", a11y_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id), Some(&a11y_task_id),
     );
 
     let (color_res, upload_res, a11y_res) = tokio::join!(color_fut, upload_fut, a11y_fut);
@@ -940,18 +954,20 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
         for illust in &data.illusts {
             let downloads = save_illust(state, illust, None, None, None).await?;
             for dl in downloads {
+                let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
                     image_id: dl.image_id,
                     source_image_url: dl.source_image_url,
                     image_path: dl.image_path,
-                    parent_job_id: Some(current_id.clone()),
-                    root_job_id: Some(current_id.clone()),
+                    parent_job_id: Some(current_id.to_string()),
+                    root_job_id: Some(current_id.to_string()),
+                    task_id: Some(download_task_id.clone()),
                 };
                 let metadata = serde_json::to_value(&download_job)
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
                 state
                     .queue_backend
-                    .push_task(&download_job, "download", metadata, &state.db, Some(&current_id), Some(&current_id), None, Some(dl.image_id))
+                    .push_task(&download_job, "download", metadata, &state.db, Some(&current_id), Some(&current_id), None, Some(dl.image_id), Some(&download_task_id))
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }
@@ -963,18 +979,20 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
 
     // Submit next hop if within limits
     if hop < max_hops {
+        let next_discover_task_id = uuid::Uuid::new_v4().to_string();
         let next_discover_job = DiscoverJob {
             hop: hop + 1,
             max_hops: Some(max_hops),
             seed_limit: Some(seed_limit),
             seed_method: job.seed_method.clone(),
             parent_job_id: Some(current_id.clone()),
+            task_id: Some(next_discover_task_id.clone()),
         };
         let metadata = serde_json::to_value(&next_discover_job)
             .map_err(|e| format!("Failed to serialize discover job: {}", e))?;
         state
             .queue_backend
-            .push_task(&next_discover_job, "discover", metadata, &state.db, Some(&current_id), Some(&current_id), None, None)
+            .push_task(&next_discover_job, "discover", metadata, &state.db, Some(&current_id), Some(&current_id), None, None, Some(&next_discover_task_id))
             .await
             .map_err(|e| format!("Failed to submit next discover task: {}", e))?;
 

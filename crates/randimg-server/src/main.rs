@@ -140,6 +140,7 @@ async fn main() {
                     );
                     continue;
                 }
+                let refresh_task_id = uuid::Uuid::new_v4().to_string();
                 if let Err(e) = state
                     .worker
                     .queue_backend
@@ -147,6 +148,7 @@ async fn main() {
                         &randimg_core::task_queue::jobs::RefreshPixivTokenJob {
                             credential_id: cred.id,
                             parent_job_id: None,
+                            task_id: Some(refresh_task_id.clone()),
                         },
                         "refresh_pixiv_token",
                         serde_json::json!({"credential_id": cred.id}),
@@ -155,6 +157,7 @@ async fn main() {
                         None,
                         None,
                         None,
+                        Some(&refresh_task_id),
                     )
                     .await
                 {

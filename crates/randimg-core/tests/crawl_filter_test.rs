@@ -70,6 +70,8 @@ fn test_crawl_job_serialization_with_filters() {
         discover_seed_limit: None,
         discover_seed_method: None,
         parent_job_id: None,
+        disable_discover: None,
+        task_id: None,
     };
 
     let json = serde_json::to_string(&job).unwrap();
@@ -101,6 +103,8 @@ fn test_crawl_job_empty_illust_type_filter() {
         discover_seed_limit: None,
         discover_seed_method: None,
         parent_job_id: None,
+        disable_discover: None,
+        task_id: None,
     };
 
     let json = serde_json::to_string(&job).unwrap();

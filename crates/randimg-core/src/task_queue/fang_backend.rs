@@ -119,19 +119,35 @@ impl QueueBackend {
         root_id: Option<&str>,
         crawler_id: Option<i32>,
         image_id: Option<i32>,
+        task_id: Option<&str>,
     ) -> Result<String, String> {
-        // 1. 创建自定义任务记录
-        let task_record = query::task::create(
-            db,
-            task_type,
-            parent_id,
-            root_id,
-            crawler_id,
-            image_id,
-            Some(&metadata.to_string()),
-        )
-        .await
-        .map_err(|e| format!("创建任务记录失败: {}", e))?;
+        // 1. 创建自定义任务记录 — 使用提供的 task_id 或生成新的
+        let task_record = if let Some(tid) = task_id {
+            query::task::create_with_id(
+                db,
+                tid,
+                task_type,
+                parent_id,
+                root_id,
+                crawler_id,
+                image_id,
+                Some(&metadata.to_string()),
+            )
+            .await
+            .map_err(|e| format!("创建任务记录失败: {}", e))?
+        } else {
+            query::task::create(
+                db,
+                task_type,
+                parent_id,
+                root_id,
+                crawler_id,
+                image_id,
+                Some(&metadata.to_string()),
+            )
+            .await
+            .map_err(|e| format!("创建任务记录失败: {}", e))?
+        };
 
         tracing::info!(task_id = %task_record.id, task_type, "Task record created");
 

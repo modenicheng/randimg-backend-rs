@@ -71,6 +71,7 @@ pub async fn spawn_workers(
             .task_type(task_type)
             .queue(queue.clone())
             .sleep_params(sleep_params.clone())
+            .retention_mode(fang::RetentionMode::KeepAll)
             .build();
 
         tracing::info!(

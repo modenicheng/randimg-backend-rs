@@ -28,6 +28,7 @@ chrono = { workspace = true }
 reqwest = { workspace = true }
 migration = { workspace = true }
 sea-orm = { workspace = true }
+uuid = { workspace = true }
 
 [features]
 default = ["db-postgres", "queue-postgres", "http"]

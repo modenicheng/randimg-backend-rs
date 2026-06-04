@@ -329,6 +329,38 @@ pub async fn create(
     model.insert(db).await
 }
 
+/// 创建任务记录（使用指定的 ID）
+pub async fn create_with_id(
+    db: &DatabaseConnection,
+    id: &str,
+    task_type: &str,
+    parent_id: Option<&str>,
+    root_id: Option<&str>,
+    crawler_id: Option<i32>,
+    image_id: Option<i32>,
+    params: Option<&str>,
+) -> Result<task::Model, DbErr> {
+    let now = Utc::now();
+
+    let model = task::ActiveModel {
+        id: Set(id.to_string()),
+        fang_task_id: Set(None),
+        task_type: Set(task_type.to_string()),
+        status: Set(task::STATUS_PENDING.to_string()),
+        parent_id: Set(parent_id.map(|s| s.to_string())),
+        root_id: Set(root_id.map(|s| s.to_string())),
+        crawler_id: Set(crawler_id),
+        image_id: Set(image_id),
+        params: Set(params.map(|s| s.to_string())),
+        error_message: Set(None),
+        retry_count: Set(0),
+        created_at: Set(now.into()),
+        updated_at: Set(now.into()),
+        completed_at: Set(None),
+    };
+    model.insert(db).await
+}
+
 /// 关联 Fang 任务 ID 并更新状态为 queued
 pub async fn link_fang_task(
     db: &DatabaseConnection,

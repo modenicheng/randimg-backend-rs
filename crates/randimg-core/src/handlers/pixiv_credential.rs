@@ -12,6 +12,7 @@ use crate::auth::middleware::AuthUser;
 use crate::db::query;
 use crate::error::AppError;
 use crate::task_queue::jobs::RefreshPixivTokenJob;
+use uuid::Uuid;
 
 pub fn routes() -> Router<Arc<WorkerState>> {
     Router::new()
@@ -165,7 +166,12 @@ pub async fn refresh_credential(
         .map_err(AppError::from)?
         .ok_or(AppError::NotFound("Credential not found".into()))?;
 
-    let refresh_job = RefreshPixivTokenJob { credential_id: id, parent_job_id: None };
+    let task_id = Uuid::new_v4().to_string();
+    let refresh_job = RefreshPixivTokenJob {
+        credential_id: id,
+        parent_job_id: None,
+        task_id: Some(task_id.clone()),
+    };
     state
         .queue_backend
         .push_task(
@@ -177,6 +183,7 @@ pub async fn refresh_credential(
             None,
             None,
             None,
+            Some(&task_id),
         )
         .await
         .map_err(|e| AppError::Internal(e))?;
