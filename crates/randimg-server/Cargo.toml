@@ -2,6 +2,7 @@
 name = "randimg-server"
 version.workspace = true
 edition.workspace = true
+default-run = "randimg-server"
 
 [[bin]]
 name = "randimg-server"

@@ -65,9 +65,10 @@ pixiv-client = "1.2"
 rayon = "1.12.0"
 
 # Background job queue (fang — async API, sqlx-based)
-# 使用 asynk-postgres 特性，与 sea-orm 共享 sqlx 连接池
+# migrations-postgres 用于 fang::run_migrations_postgres() 初始化队列表
 # 注意：需要同时启用 blocking + blocking-postgres 特性，因为 fang 的 Task 结构体有 diesel 属性 bug
-fang = { version = "0.11.0-rc1", default-features = false, features = ["derive-error", "asynk-postgres", "blocking", "blocking-postgres"] }
+fang = { version = "0.11.0-rc1", default-features = false, features = ["derive-error", "asynk-postgres", "blocking", "blocking-postgres", "migrations-postgres"] }
+diesel = { version = "2", default-features = false, features = ["postgres"] }
 ulid = "1"
 
 # DogeCloud OSS (AWS S3 compatible)

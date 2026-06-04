@@ -67,6 +67,7 @@ rayon = { workspace = true }
 
 # Background job queue
 fang = { workspace = true }
+diesel = { workspace = true }
 ulid = { workspace = true }
 
 # DogeCloud OSS (AWS S3 compatible)

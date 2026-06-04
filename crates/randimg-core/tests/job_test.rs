@@ -20,6 +20,7 @@ fn test_crawl_job_roundtrip() {
         parent_job_id: None,
         exclude_r18: None,
         exclude_ai: None,
+        illust_type_filter: None,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: CrawlJob = serde_json::from_str(&json).unwrap();
@@ -33,6 +34,7 @@ fn test_crawl_job_roundtrip() {
     assert!(deserialized.discover_hops.is_none());
     assert!(deserialized.discover_seed_limit.is_none());
     assert!(deserialized.discover_seed_method.is_none());
+    assert!(deserialized.illust_type_filter.is_none());
 }
 
 #[test]
@@ -138,7 +140,8 @@ fn test_crawl_job_deserialize_from_json_literal() {
         "target_user_id": null,
         "target_start_date": "2026-01-01",
         "target_end_date": "2026-01-31",
-        "target_search_prompt": null
+        "target_search_prompt": null,
+        "illust_type_filter": null
     }"#;
     let job: CrawlJob = serde_json::from_str(json).unwrap();
     assert_eq!(job.crawler_id, 10);
@@ -191,6 +194,7 @@ fn test_parent_job_id_roundtrip() {
         parent_job_id: Some("parent-uuid-abc".into()),
         exclude_r18: None,
         exclude_ai: None,
+        illust_type_filter: None,
     };
     let json = serde_json::to_string(&job).unwrap();
     assert!(json.contains("parent-uuid-abc"));

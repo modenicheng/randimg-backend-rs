@@ -62,7 +62,27 @@ impl QueueBackend {
             .await
             .map_err(|e| format!("连接 Fang 队列数据库失败: {}", e))?;
 
+        // 初始化 fang 队列表（fang_tasks + fang_task_state enum）
+        Self::setup_schema(&config.queue_database_url).await?;
+
         Ok(Self { queue })
+    }
+
+    /// 使用 fang 官方 migration API 初始化队列 schema
+    ///
+    /// 调用 `fang::run_migrations_postgres()` 创建 `fang_tasks` 表和相关类型。
+    /// fang 内部使用 diesel_migrations 追踪已执行的 migration，天然幂等。
+    async fn setup_schema(queue_database_url: &str) -> Result<(), String> {
+        use diesel::Connection;
+
+        let mut connection = diesel::PgConnection::establish(queue_database_url)
+            .map_err(|e| format!("连接 Fang 队列数据库失败（migration）: {}", e))?;
+
+        fang::run_migrations_postgres(&mut connection)
+            .map_err(|e| format!("执行 Fang migration 失败: {}", e))?;
+
+        tracing::info!("Fang 队列 migration 完成");
+        Ok(())
     }
 
     /// 推送任务到 fang 队列并同步到自定义任务表
