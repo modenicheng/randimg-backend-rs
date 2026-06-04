@@ -35,8 +35,8 @@ Cargo.toml                    # Virtual workspace root
 **Layered architecture**: `handlers → db/query → db/entities`
 
 **Feature flags**:
-- `db-sqlite` (default) / `db-postgres` — SeaORM database backend (mutually exclusive)
-- `queue-postgres` (default) / `queue-sqlite` — Fang queue backend (mutually exclusive)
+- `db-postgres` (default) — SeaORM PostgreSQL database backend
+- `queue-postgres` (default) — Fang async PostgreSQL queue backend
 
 ## Coding Style [CONFIDENCE: high]
 
@@ -102,7 +102,6 @@ cargo test test_name_here
 - `tests/` — Test files
 - `docs/` — Documentation
 - `examples/` — Example code
-- `data/` — SQLite database storage
 - `images/` — Downloaded images
 - `logs/` — Application logs
 
@@ -115,7 +114,7 @@ cargo test test_name_here
 - **Async runtime**: `tokio` 1 (full features)
 - **ORM**: `sea-orm` 1
 - **Task queue**: `fang` (async PostgreSQL)
-- **Database**: SQLite or PostgreSQL (feature-gated), API 与队列分离
+- **Database**: PostgreSQL, API 与队列分离
 - **Serialization**: `serde` 1 + `serde_json` 1
 - **Auth**: `jsonwebtoken` 9 + `argon2` 0.5
 - **HTTP client**: `reqwest` 0.13
@@ -132,14 +131,8 @@ cargo test test_name_here
 
 **Build & Run**:
 ```bash
-# Default: SQLite API + PostgreSQL queue
+# Default: PostgreSQL API + PostgreSQL queue
 cargo build
-
-# No PostgreSQL (SQLite queue)
-cargo build --no-default-features --features db-sqlite,queue-sqlite
-
-# Production: PostgreSQL API + PostgreSQL queue
-cargo build --no-default-features --features db-postgres,queue-postgres
 
 # Run server
 cargo run -p randimg-server
@@ -157,15 +150,14 @@ cargo run -p randimg-core --example color_extract_demo -- path/to/image.jpg
 **Development workflow**:
 1. Copy `.env.example` to `.env`
 2. Set `SECRET_KEY` (must change from default)
-3. Ensure PostgreSQL is running (or use `queue-sqlite` feature)
+3. Ensure PostgreSQL is running
 4. Run `cargo build` to compile
-5. Run `cargo test -p randimg-core --features db-sqlite,queue-sqlite -- --skip color_test` to verify
+5. Run `cargo test -p randimg-core -- --skip color_test` to verify
 6. Run `cargo run -p randimg-server` to start server
 
 **Database migrations**:
 - Migrations in `migration/src/` with `m{YYYYMMDD}_{seq}_{name}.rs` naming
 - Auto-executed on startup
-- Dual-database support via feature flags
 
 ## Common Tasks [CONFIDENCE: high]
 
@@ -190,11 +182,6 @@ cargo run -p randimg-core --example color_extract_demo -- path/to/image.jpg
 
 <!-- Source: CLAUDE.md -->
 
-**Database feature flags**:
-- `db-sqlite` and `db-postgres` features are mutually exclusive
-- `queue-sqlite` and `queue-postgres` features are mutually exclusive
-- Cannot enable both simultaneously
-
 **Database separation**:
 - `API_DATABASE_URL` — SeaORM manages business data + `tasks` table
 - `QUEUE_DATABASE_URL` — Fang manages task scheduling (PostgreSQL)
@@ -212,7 +199,6 @@ cargo run -p randimg-core --example color_extract_demo -- path/to/image.jpg
 - **Don't return raw `StatusCode`** — Use `AppError` variants
 - **Don't commit `.env` files** — Contains secrets
 - **Don't use default `SECRET_KEY`** — App panics at startup
-- **Don't enable both `sqlite` and `postgres` features** — They're mutually exclusive
 - **Don't block async runtime** — Use `spawn_blocking` for CPU-intensive work
 - **Don't ignore N+1 queries** — Batch-fetch associations
 
@@ -269,12 +255,10 @@ cargo run --bin migrate
 <!-- Source: README.md, .env.example -->
 
 **Database**:
-- SQLite (development): `sqlite://data/randimg.db?mode=rwc`
-- PostgreSQL (production): Connection string in `DATABASE_URL`
+- PostgreSQL: Connection string in `API_DATABASE_URL`
 
 **Queue**:
-- PostgreSQL (default): `QUEUE_DATABASE_URL` connection string
-- SQLite (dev fallback): Same as API database
+- PostgreSQL: `QUEUE_DATABASE_URL` connection string
 
 **Cloud storage**:
 - DogeCloud (AWS S3 compatible)
@@ -314,7 +298,7 @@ cargo run --bin migrate
 - `PIXIV_REFRESH_TOKEN` — Required for Pixiv crawling
 
 **Optional variables**:
-- `API_DATABASE_URL` — Default: `sqlite://data/randimg.db?mode=rwc`
+- `API_DATABASE_URL` — Default: `postgres://user:password@localhost/randimg`
 - `QUEUE_DATABASE_URL` — PostgreSQL connection string for Fang queue
 - `JWT_EXPIRE_MINUTES` — Default: 60
 - `CDN_BASE_URL` — Default: `https://cdn.example.com/`
@@ -383,5 +367,5 @@ cargo run --bin migrate
 ## Changelog
 
 - 2026-06-03: Initial knowledge base creation
-- 2026-06-03: Major refactor — 3-crate workspace, Redis queue backend, WorkerState/ServerState split, distributed worker binary
+- 2026-06-03: Major refactor — 3-crate workspace, Fang queue backend, WorkerState/ServerState split, distributed worker binary
 - 2026-06-03: Queue migration — Apalis → Fang (async PostgreSQL), API/队列数据库分离, removed Redis dependency

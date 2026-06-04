@@ -106,7 +106,7 @@ The API exposes these statuses directly. The `failed` state covers both transien
 
 #### Derived status for root tasks (`GET /tasks/roots`)
 
-`list_roots_derived` (SQLite/PostgreSQL recursive CTE in `src/db/query/task_tree.rs`) computes four boolean flags per root from its descendant subtree:
+`list_roots_derived` (PostgreSQL recursive CTE in `src/db/query/task_tree.rs`) computes four boolean flags per root from its descendant subtree:
 
 | Flag | Meaning |
 |---|---|
@@ -167,7 +167,7 @@ All settings come from environment variables (loaded via `dotenvy`). The app pan
 - **`crates/randimg-core/src/task_queue/jobs.rs`** — Job struct definitions (one per task type), implementing `AsyncRunnable`.
 - **`crates/randimg-core/src/task_queue/handlers.rs`** — Job handler functions (one per task type).
 - **`crates/randimg-core/src/db/query/image.rs`** — Most complex query file: random selection, paginated list with popularity scoring, color search with bounding-box pre-filter, discover seed selection.
-- **`crates/randimg-core/src/db/query/task_tree.rs`** — Recursive CTE (SQLite + PostgreSQL) computing `has_active` / `has_failed` / `has_completed` flags per root; `derived_status_from_flags` implements the rollup; `list_roots_derived` / `count_roots_derived` apply derived-status filters in SQL.
+- **`crates/randimg-core/src/db/query/task_tree.rs`** — Recursive CTE (PostgreSQL) computing `has_active` / `has_failed` / `has_completed` flags per root; `derived_status_from_flags` implements the rollup; `list_roots_derived` / `count_roots_derived` apply derived-status filters in SQL.
 - **`crates/randimg-core/src/color/kmeans.rs`** — KMeans++ with empty-cluster recovery and parallel chunk assignment.
 - **`crates/randimg-core/src/handlers/image.rs`** — Image serving with path traversal protection (canonicalize + prefix check).
 
