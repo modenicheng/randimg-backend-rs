@@ -1,4 +1,3 @@
-use chrono::NaiveDateTime;
 use sea_orm::JsonValue;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -25,7 +24,7 @@ pub struct Model {
     pub avatar_available: Option<bool>,
     pub is_public: bool,
     pub downloaded: bool,
-    pub source_created_at: Option<NaiveDateTime>,
+    pub source_created_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_type = "BigInteger")]
     pub total_view: i64,
     #[sea_orm(column_type = "BigInteger")]
@@ -33,8 +32,8 @@ pub struct Model {
     #[sea_orm(column_type = "BigInteger")]
     pub total_comments: i64,
     pub fetched_times: i32,
-    pub created_at: NaiveDateTime,
-    pub deleted_at: Option<NaiveDateTime>,
+    pub created_at: DateTimeWithTimeZone,
+    pub deleted_at: Option<DateTimeWithTimeZone>,
     pub illust_type: Option<String>,
     #[sea_orm(default_value = 0)]
     pub x_restrict: i32,

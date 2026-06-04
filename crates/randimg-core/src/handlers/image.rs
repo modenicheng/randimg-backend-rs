@@ -382,7 +382,7 @@ pub async fn delete_image(
 
     // Soft delete: set deleted_at and mark as not public
     let mut active = img.into_active_model();
-    active.deleted_at = Set(Some(Utc::now().naive_utc()));
+    active.deleted_at = Set(Some(Utc::now().fixed_offset()));
     active.is_public = Set(false);
     active.update(&state.db).await.map_err(AppError::from)?;
 

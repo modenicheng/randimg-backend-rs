@@ -851,7 +851,7 @@ async fn test_soft_deleted_image_excluded_from_list() {
     use randimg_core::db::entities::image::Entity as ImageEntity;
     let existing = ImageEntity::find_by_id(img.id).one(&db).await.unwrap().unwrap();
     let mut active: randimg_core::db::entities::image::ActiveModel = existing.into();
-    active.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+    active.deleted_at = Set(Some(chrono::Utc::now().fixed_offset()));
     active.is_public = Set(false);
     active.update(&db).await.unwrap();
 

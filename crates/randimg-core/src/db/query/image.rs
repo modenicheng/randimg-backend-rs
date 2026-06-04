@@ -557,7 +557,8 @@ pub async fn create_image(
     // Parse source_created_at from string if present (format: "YYYY-MM-DD HH:MM:SS")
     let source_created_at = data["source_created_at"]
         .as_str()
-        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok());
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok())
+        .map(|naive| naive.and_utc().fixed_offset());
 
     let model = image::ActiveModel {
         title: Set(data["title"].as_str().unwrap_or("").to_string()),
