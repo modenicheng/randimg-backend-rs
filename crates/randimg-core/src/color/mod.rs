@@ -228,45 +228,47 @@ fn lab_to_rgb(l: f32, a: f32, b: f32) -> [u8; 3] {
 /// dedicated rayon thread pool so it doesn't compete with tokio's async
 /// executor or the global rayon pool.
 pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
+    extract_theme_colors_with_config(img, 10, 50, 2048, 0.5)
+}
+
+pub fn extract_theme_colors_with_config(
+    img: &DynamicImage,
+    k: usize,
+    max_iter: usize,
+    batch_size: usize,
+    image_scale: f64,
+) -> ThemeColors {
     run_on_color_pool(|| {
-        // Scale down to reduce computation
-        let scale = 0.5;
         let (w, h) = img.dimensions();
-        let new_w = ((w as f64 * scale) as u32).max(1);
-        let new_h = ((h as f64 * scale) as u32).max(1);
+        let new_w = ((w as f64 * image_scale) as u32).max(1);
+        let new_h = ((h as f64 * image_scale) as u32).max(1);
         let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
         let rgb = small.to_rgb8();
 
-        // Collect pixels as [u8; 3]
         let pixels: Vec<[u8; 3]> = rgb.pixels().map(|p| [p[0], p[1], p[2]]).collect();
 
         if pixels.is_empty() {
             return ThemeColors {
                 primary_color: [0, 0, 0],
                 primary_lab: [0.0f32; 3],
-                colors: vec![[0, 0, 0]; 10],
-                colors_lab: vec![[0.0f32; 3]; 10],
+                colors: vec![[0, 0, 0]; k],
+                colors_lab: vec![[0.0f32; 3]; k],
             };
         }
 
-        // Primary color from histogram (16 levels per channel)
         let primary_color = histogram_primary_color(&pixels, 16);
         let primary_lab = rgb_to_lab(primary_color[0], primary_color[1], primary_color[2]);
 
-        // Convert to LAB for clustering (parallel on dedicated pool)
         let lab_pixels: Vec<[f32; 3]> = pixels
             .par_iter()
             .map(|p| rgb_to_lab(p[0], p[1], p[2]))
             .collect();
 
-        // KMeans clustering in LAB space
-        let lab_centroids = kmeans::kmeans(&lab_pixels, 10, 50, Some(2048), false);
+        let lab_centroids = kmeans::kmeans(&lab_pixels, k, max_iter, Some(batch_size), false);
 
-        // Sort by L* (lightness)
         let mut sorted_lab = lab_centroids;
         sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Keep LAB centroids for storage, also convert to RGB
         let colors_lab: Vec<[f32; 3]> = sorted_lab.clone();
         let colors: Vec<[u8; 3]> = sorted_lab
             .into_iter()

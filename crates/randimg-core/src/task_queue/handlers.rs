@@ -813,13 +813,18 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
 pub async fn handle_color_extract(job: ColorExtractJob, state: &Arc<WorkerState>) -> Result<(), String> {
     let image_dir = state.config.image_dir.clone();
     let image_id = job.image_id;
+    let color_k = state.config.color_extract_k;
+    let color_max_iter = state.config.color_extract_max_iter;
+    let color_batch_size = state.config.color_extract_batch_size;
+    let color_image_scale = state.config.color_extract_image_scale;
 
-    // CPU-heavy work: image decode + KMeans on blocking thread pool
     let colors = tokio::task::spawn_blocking(move || {
         let full_path = format!("{}/{}", image_dir, job.image_path);
         let img = ::image::open(&full_path)
             .map_err(|e| format!("Failed to open image: {}", e))?;
-        Ok::<_, String>(crate::color::extract_theme_colors(&img))
+        Ok::<_, String>(crate::color::extract_theme_colors_with_config(
+            &img, color_k, color_max_iter, color_batch_size, color_image_scale,
+        ))
     })
     .await
     .map_err(|e| format!("spawn_blocking panicked: {}", e))??;
