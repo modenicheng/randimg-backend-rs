@@ -25,15 +25,17 @@ struct PointBounds {
 /// - `max_iter`: maximum iterations
 /// - `batch_size`: if Some(n), use mini-batch KMeans with n samples per iteration;
 ///   if None, use full-batch KMeans
+///
+/// Returns `(centroids, counts)` where `counts[j]` is the number of points assigned to cluster `j`.
 pub fn kmeans(
     data: &[[f32; 3]],
     k: usize,
     max_iter: usize,
     batch_size: Option<usize>,
     hamerly: bool,
-) -> Vec<[f32; 3]> {
+) -> (Vec<[f32; 3]>, Vec<usize>) {
     if data.is_empty() || k == 0 {
-        return vec![];
+        return (vec![], vec![]);
     }
     if data.len() <= k {
         // Not enough data for k clusters — duplicate points to fill
@@ -41,7 +43,8 @@ pub fn kmeans(
         while result.len() < k {
             result.push(data[result.len() % data.len()]);
         }
-        return result;
+        let counts = vec![1usize; k];
+        return (result, counts);
     }
 
     // KMeans++ initialization
@@ -54,7 +57,26 @@ pub fn kmeans(
         None => full_batch(data, &mut centroids, &mut assignments, k, max_iter, hamerly),
     }
 
-    centroids
+    let counts = assignments
+        .par_iter()
+        .fold(
+            || vec![0usize; k],
+            |mut c, &a| {
+                c[a] += 1;
+                c
+            },
+        )
+        .reduce(
+            || vec![0usize; k],
+            |mut a, b| {
+                for i in 0..k {
+                    a[i] += b[i];
+                }
+                a
+            },
+        );
+
+    (centroids, counts)
 }
 
 /// KMeans++ initialization: pick centroids proportional to squared distance from nearest existing centroid.
@@ -513,15 +535,6 @@ fn median(values: &mut [f32]) -> f32 {
     } else {
         values[n / 2]
     }
-}
-
-/// Squared Euclidean distance between two 3D points.
-#[inline]
-fn euclidean_sq(a: &[f32; 3], b: &[f32; 3]) -> f32 {
-    let dx = a[0] - b[0];
-    let dy = a[1] - b[1];
-    let dz = a[2] - b[2];
-    dx * dx + dy * dy + dz * dz
 }
 
 /// HyAB distance metric for CIELAB color space.

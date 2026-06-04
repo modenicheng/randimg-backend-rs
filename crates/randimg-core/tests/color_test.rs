@@ -104,6 +104,47 @@ fn test_extract_theme_colors_handles_single_pixel() {
     // That's acceptable — the function should not panic
 }
 
+#[test]
+fn test_extract_theme_colors_filters_accent_colors() {
+    // Simulate image with 99% dark pixels and 1% bright accent pixels
+    // The accent cluster should be filtered out
+    let mut data = Vec::new();
+
+    // 990 dark pixels (cluster around L*=20)
+    for _ in 0..990 {
+        data.push([20.0, 0.0, 0.0]);
+    }
+
+    // 10 bright accent pixels (cluster around L*=90)
+    for _ in 0..10 {
+        data.push([90.0, 50.0, 50.0]);
+    }
+
+    let (_centroids, counts) = kmeans(&data, 3, 30, None, false);
+
+    // After filtering in extract_theme_colors, small clusters (<1% of total)
+    // should be removed. Here we verify the raw kmeans output first.
+    let total: usize = counts.iter().sum();
+    let min_size = total / 100; // 1% threshold
+
+    // At least one cluster should have fewer than min_size points
+    let has_small_cluster = counts.iter().any(|&c| c < min_size);
+    assert!(
+        has_small_cluster,
+        "Expected at least one small cluster (<{} points), got counts: {:?}",
+        min_size, counts
+    );
+
+    // The accent cluster (10 points) should be much smaller than min_size (10 points = 1%)
+    let accent_count = counts.iter().min().unwrap();
+    assert!(
+        *accent_count <= min_size,
+        "Smallest cluster should be <= {} points, got {}",
+        min_size,
+        accent_count
+    );
+}
+
 // ---- KMeans unit tests ----
 
 #[test]
@@ -117,7 +158,7 @@ fn test_kmeans_basic_clustering() {
         data.push([100.0, 100.0, 100.0]);
     }
 
-    let centroids = kmeans(&data, 2, 20, None, false);
+    let (centroids, _counts) = kmeans(&data, 2, 20, None, false);
 
     assert_eq!(centroids.len(), 2);
 
@@ -139,21 +180,21 @@ fn test_kmeans_basic_clustering() {
 #[test]
 fn test_kmeans_empty_input() {
     let data: Vec<[f32; 3]> = vec![];
-    let centroids = kmeans(&data, 3, 10, None, false);
+    let (centroids, _counts) = kmeans(&data, 3, 10, None, false);
     assert!(centroids.is_empty());
 }
 
 #[test]
 fn test_kmeans_k_zero() {
     let data = vec![[1.0, 2.0, 3.0]; 10];
-    let centroids = kmeans(&data, 0, 10, None, false);
+    let (centroids, _counts) = kmeans(&data, 0, 10, None, false);
     assert!(centroids.is_empty());
 }
 
 #[test]
 fn test_kmeans_k_larger_than_data() {
     let data = vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
-    let centroids = kmeans(&data, 5, 10, None, false);
+    let (centroids, _counts) = kmeans(&data, 5, 10, None, false);
     // When k > data.len(), centroids are padded by duplicating data points
     assert_eq!(
         centroids.len(),
@@ -184,7 +225,7 @@ fn test_kmeans_empty_cluster_recovery() {
     data.push([1000.0, 1000.0, 1000.0]);
     data.push([1001.0, 1001.0, 1001.0]);
 
-    let centroids = kmeans(&data, 3, 30, None, false);
+    let (centroids, _counts) = kmeans(&data, 3, 30, None, false);
     assert_eq!(centroids.len(), 3);
 
     // All three centroids should be distinct (empty cluster recovery kicks in)
@@ -208,7 +249,7 @@ fn test_kmeans_mini_batch() {
         data.push([50.0, 50.0, 50.0]);
     }
 
-    let centroids = kmeans(&data, 2, 50, Some(100), false);
+    let (centroids, _counts) = kmeans(&data, 2, 50, Some(100), false);
 
     assert_eq!(centroids.len(), 2);
     let mut sorted = centroids.clone();
@@ -230,7 +271,7 @@ fn test_kmeans_produces_correct_k() {
     let data: Vec<[f32; 3]> = (0..100).map(|i| [i as f32, 0.0, 0.0]).collect();
 
     for k in [1, 3, 5, 10] {
-        let centroids = kmeans(&data, k, 20, None, false);
+        let (centroids, _counts) = kmeans(&data, k, 20, None, false);
         assert_eq!(centroids.len(), k, "k={} should produce {} centroids", k, k);
     }
 }
@@ -258,7 +299,7 @@ fn test_median_centroid_updates_l_channel() {
     data.push([90.0, 100.0, 100.0]);
     data.push([300.0, 100.0, 100.0]);
 
-    let centroids = kmeans(&data, 2, 50, None, false);
+    let (centroids, _counts) = kmeans(&data, 2, 50, None, false);
     assert_eq!(centroids.len(), 2);
 
     // Identify which centroid is cluster 0 (lower a/b) vs cluster 1 (higher a/b)
@@ -311,7 +352,7 @@ fn test_hamerly_skips_unchanged_points() {
 
     randimg_core::color::kmeans::reset_hamerly_skips();
 
-    let centroids = kmeans(&data, 2, 20, None, true);
+    let (centroids, _counts) = kmeans(&data, 2, 20, None, true);
 
     assert_eq!(centroids.len(), 2);
 

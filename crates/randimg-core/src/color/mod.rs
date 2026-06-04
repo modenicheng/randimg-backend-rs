@@ -228,20 +228,22 @@ fn lab_to_rgb(l: f32, a: f32, b: f32) -> [u8; 3] {
 /// dedicated rayon thread pool so it doesn't compete with tokio's async
 /// executor or the global rayon pool.
 pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
-    extract_theme_colors_with_config(img, 10, 50, 2048, 0.5)
+    extract_theme_colors_with_config(img, 12, 50, 2048, 0.5)
 }
 
-pub fn extract_theme_colors_with_config(
-    img: &DynamicImage,
-    k: usize,
-    max_iter: usize,
-    batch_size: usize,
-    image_scale: f64,
-) -> ThemeColors {
-    run_on_color_pool(|| {
-        let (w, h) = img.dimensions();
-        let new_w = ((w as f64 * image_scale) as u32).max(1);
-        let new_h = ((h as f64 * image_scale) as u32).max(1);
+    pub fn extract_theme_colors_with_config(
+        img: &DynamicImage,
+        k: usize,
+        max_iter: usize,
+        batch_size: usize,
+        image_scale: f64,
+    ) -> ThemeColors {
+        run_on_color_pool(|| {
+            let (w, h) = img.dimensions();
+            let max_dim = w.max(h) as f64;
+            let scale = if max_dim > 1024.0 { 1024.0 / max_dim } else { image_scale };
+            let new_w = ((w as f64 * scale) as u32).max(1);
+            let new_h = ((h as f64 * scale) as u32).max(1);
         let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
         let rgb = small.to_rgb8();
 
@@ -264,9 +266,16 @@ pub fn extract_theme_colors_with_config(
             .map(|p| rgb_to_lab(p[0], p[1], p[2]))
             .collect();
 
-        let lab_centroids = kmeans::kmeans(&lab_pixels, k, max_iter, Some(batch_size), false);
+        let (lab_centroids, counts) =
+            kmeans::kmeans(&lab_pixels, k, max_iter, None, false);
 
-        let mut sorted_lab = lab_centroids;
+        // 按像素数排序，取前 10 个最大的簇
+        let mut cluster_pairs: Vec<_> = lab_centroids.into_iter().zip(counts.into_iter()).collect();
+        cluster_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+        let top_k = 10.min(cluster_pairs.len());
+        let final_centroids: Vec<[f32; 3]> = cluster_pairs[..top_k].iter().map(|(c, _)| *c).collect();
+
+        let mut sorted_lab = final_centroids;
         sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
 
         let colors_lab: Vec<[f32; 3]> = sorted_lab.clone();
