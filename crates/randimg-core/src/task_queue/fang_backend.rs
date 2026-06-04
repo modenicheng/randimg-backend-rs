@@ -25,9 +25,6 @@ use crate::config::AppConfig;
 use crate::db::query;
 use fang::asynk::async_queue::{AsyncQueue, AsyncQueueable};
 use fang::asynk::async_runnable::AsyncRunnable;
-use fang::async_trait;
-use fang::Task as FangTask;
-use fang::typetag;
 use sea_orm::DatabaseConnection;
 use serde_json::Value as JsonValue;
 
@@ -94,8 +91,9 @@ impl QueueBackend {
     ///
     /// # Arguments
     ///
-    /// * `task_type` - 任务类型标识（如 "crawl"、"download"）
-    /// * `metadata`  - 任务参数 JSON，同时写入 `tasks.params` 和 `fang_tasks.metadata`
+    /// * `task`      - 实际的 `AsyncRunnable` 实现（如 `CrawlJob`、`DownloadJob`）
+    /// * `task_type` - 任务类型标识（如 "crawl"、"download"），写入自定义 tasks 表
+    /// * `metadata`  - 任务参数 JSON，写入 `tasks.params`
     /// * `db`        - SeaORM 数据库连接（自定义 tasks 表）
     /// * `parent_id` - 父任务 ID（可选）
     /// * `root_id`   - 根任务 ID（可选）
@@ -108,14 +106,12 @@ impl QueueBackend {
     ///
     /// # AsyncRunnable 集成
     ///
-    /// 此方法通过 `queue.insert_task()` 插入 fang 任务。调用方需要传入一个
-    /// 已实现 `AsyncRunnable` 的 task struct，该 struct 的序列化字段
-    /// 包含执行任务所需的全部信息。
-    ///
-    /// **当前实现**：使用占位符 `PlaceholderTask` 完成插入流程。
-    /// 各 job 类型的具体 `AsyncRunnable` 实现在 Task 6 中完成。
+    /// 此方法通过 `queue.insert_task(task)` 将实际的 AsyncRunnable 插入 fang 队列。
+    /// fang 使用 `typetag::serde` 序列化 task struct，worker 反序列化后直接执行
+    /// 对应类型的 `AsyncRunnable::run()` 实现。
     pub async fn push_task(
         &self,
+        task: &(dyn AsyncRunnable + Send + Sync),
         task_type: &str,
         metadata: JsonValue,
         db: &DatabaseConnection,
@@ -125,7 +121,7 @@ impl QueueBackend {
         image_id: Option<i32>,
     ) -> Result<String, String> {
         // 1. 创建自定义任务记录
-        let task = query::task::create(
+        let task_record = query::task::create(
             db,
             task_type,
             parent_id,
@@ -137,27 +133,25 @@ impl QueueBackend {
         .await
         .map_err(|e| format!("创建任务记录失败: {}", e))?;
 
-        tracing::info!(task_id = %task.id, task_type, "Task record created");
+        tracing::info!(task_id = %task_record.id, task_type, "Task record created");
 
-        // 2. 插入到 fang 队列
-        //
-        // 使用 AsyncRunnable 占位符插入。Task 6 将为每个 job 类型
-        // 实现真实的 AsyncRunnable，届时替换此处的占位逻辑。
+        // 2. 插入到 fang 队列 — 使用实际的 AsyncRunnable 实现
         let fang_task = self
-            .insert_fang_task(task_type, metadata)
+            .queue
+            .insert_task(task)
             .await
             .map_err(|e| format!("插入 fang 任务失败: {}", e))?;
 
         let fang_task_id = uuid_to_i64(&fang_task.id);
-        tracing::info!(task_id = %task.id, fang_task_id, "Pushed to fang queue");
+        tracing::info!(task_id = %task_record.id, fang_task_id, "Pushed to fang queue");
 
         // 3. 关联 fang 任务 ID（同时更新状态为 queued）
-        query::task::link_fang_task(db, &task.id, fang_task_id)
+        query::task::link_fang_task(db, &task_record.id, fang_task_id)
             .await
             .map_err(|e| format!("关联 fang 任务失败: {}", e))?;
 
-        tracing::info!(task_id = %task.id, "Task queued successfully");
-        Ok(task.id)
+        tracing::info!(task_id = %task_record.id, "Task queued successfully");
+        Ok(task_record.id)
     }
 
     /// 获取内部 `AsyncQueue` 的不可变引用
@@ -165,68 +159,6 @@ impl QueueBackend {
     /// 供 worker 直接操作队列（如 `fetch_and_touch_task`、`schedule_retry`）。
     pub fn queue(&self) -> &AsyncQueue {
         &self.queue
-    }
-
-    // ── 内部方法 ──────────────────────────────────────────────
-
-    /// 通过 `AsyncQueueable::insert_task()` 插入 fang 任务
-    ///
-    /// 构造一个临时的 `PlaceholderTask`（实现 `AsyncRunnable`）来调用
-    /// fang 的异步插入 API。返回的 `FangTask` 包含 fang 分配的 UUID。
-    ///
-    /// TODO(Task 6): 为每个 job 类型实现 `AsyncRunnable`，直接传入已实现的
-    /// task struct 替代 `PlaceholderTask`。
-    async fn insert_fang_task(
-        &self,
-        task_type: &str,
-        metadata: JsonValue,
-    ) -> Result<FangTask, String> {
-        let task_runnable = PlaceholderTask {
-            task_type: task_type.to_string(),
-            metadata,
-        };
-
-        self.queue
-            .insert_task(&task_runnable)
-            .await
-            .map_err(|e| format!("fang insert_task 失败: {}", e))
-    }
-}
-
-// ── PlaceholderTask（临时占位，Task 6 替换）──────────────────
-
-/// 临时占位 task struct，用于调用 `AsyncQueueable::insert_task()`
-///
-/// 此 struct 仅用于流程验证。Task 6 将为每种 job 类型（crawl、download、
-/// color_extract 等）实现独立的 `AsyncRunnable` struct，其序列化字段
-/// 包含任务执行所需的全部数据。
-///
-/// `typetag::serde` 使得 `AsyncRunnable` trait object 可以序列化/反序列化，
-/// 这是 fang 将 metadata 写入 `fang_tasks.metadata` JSONB 字段的关键机制。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct PlaceholderTask {
-    task_type: String,
-    metadata: JsonValue,
-}
-
-#[typetag::serde]
-#[async_trait]
-impl AsyncRunnable for PlaceholderTask {
-    async fn run(
-        &self,
-        _client: &dyn AsyncQueueable,
-    ) -> Result<(), fang::FangError> {
-        // 占位实现：不应被实际执行
-        // Task 6 将替换为真实的 job handler
-        tracing::warn!(
-            task_type = %self.task_type,
-            "PlaceholderTask::run() 被调用 — 这不应发生，检查是否缺少 AsyncRunnable 实现"
-        );
-        Ok(())
-    }
-
-    fn task_type(&self) -> String {
-        self.task_type.clone()
     }
 }
 

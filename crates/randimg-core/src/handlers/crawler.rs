@@ -86,29 +86,30 @@ pub async fn create_crawler(
     .map_err(AppError::from)?;
 
     // Submit crawl task to fang job queue
+    let crawl_job = CrawlJob {
+        crawler_id: crawler.id,
+        crawl_type,
+        target_user_id: body.target_user_id,
+        target_start_date: body.target_start_date.map(|d| d.to_string()),
+        target_end_date: body.target_end_date.map(|d| d.to_string()),
+        target_search_prompt: body.target_search_prompt,
+        ranking_mode: body.ranking_mode,
+        illust_type: body.illust_type,
+        illust_type_filter: body.illust_type_filter,
+        exclude_r18: body.exclude_r18,
+        exclude_ai: body.exclude_ai,
+        max_pages: body.max_pages,
+        discover_hops: body.discover_hops,
+        discover_seed_limit: body.discover_seed_limit,
+        discover_seed_method: body.discover_seed_method,
+        parent_job_id: None,
+    };
     state
         .queue_backend
         .push_task(
+            &crawl_job,
             "crawl",
-            serde_json::to_value(&CrawlJob {
-                crawler_id: crawler.id,
-                crawl_type,
-                target_user_id: body.target_user_id,
-                target_start_date: body.target_start_date.map(|d| d.to_string()),
-                target_end_date: body.target_end_date.map(|d| d.to_string()),
-                target_search_prompt: body.target_search_prompt,
-                ranking_mode: body.ranking_mode,
-                illust_type: body.illust_type,
-                illust_type_filter: body.illust_type_filter,
-                exclude_r18: body.exclude_r18,
-                exclude_ai: body.exclude_ai,
-                max_pages: body.max_pages,
-                discover_hops: body.discover_hops,
-                discover_seed_limit: body.discover_seed_limit,
-                discover_seed_method: body.discover_seed_method,
-                parent_job_id: None,
-            })
-            .unwrap_or_default(),
+            serde_json::to_value(&crawl_job).unwrap_or_default(),
             &state.db,
             None,
             None,
@@ -172,16 +173,17 @@ pub async fn get_crawler_image(
 
         let count = images.len();
         for img in images {
+            let color_job = ColorExtractJob {
+                image_id: img.id,
+                image_path: img.image_path,
+                parent_job_id: None,
+            };
             state
                 .queue_backend
                 .push_task(
+                    &color_job,
                     "color_extract",
-                    serde_json::to_value(&ColorExtractJob {
-                        image_id: img.id,
-                        image_path: img.image_path,
-                        parent_job_id: None,
-                    })
-                    .unwrap_or_default(),
+                    serde_json::to_value(&color_job).unwrap_or_default(),
                     &state.db,
                     None,
                     None,
@@ -217,18 +219,19 @@ pub async fn trigger_discover(
     _auth: AuthUser,
     Json(body): Json<DiscoverRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let discover_job = DiscoverJob {
+        hop: 0,
+        max_hops: body.max_hops,
+        seed_limit: body.seed_limit,
+        seed_method: body.seed_method,
+        parent_job_id: None,
+    };
     state
         .queue_backend
         .push_task(
+            &discover_job,
             "discover",
-            serde_json::to_value(&DiscoverJob {
-                hop: 0,
-                max_hops: body.max_hops,
-                seed_limit: body.seed_limit,
-                seed_method: body.seed_method,
-                parent_job_id: None,
-            })
-            .unwrap_or_default(),
+            serde_json::to_value(&discover_job).unwrap_or_default(),
             &state.db,
             None,
             None,
@@ -261,16 +264,17 @@ pub async fn get_accessibility_queue(
 
         let count = images.len();
         for img in images {
+            let a11y_job = AccessibilityCheckJob {
+                image_id: img.id,
+                image_path: img.image_path,
+                parent_job_id: None,
+            };
             state
                 .queue_backend
                 .push_task(
+                    &a11y_job,
                     "accessibility_check",
-                    serde_json::to_value(&AccessibilityCheckJob {
-                        image_id: img.id,
-                        image_path: img.image_path,
-                        parent_job_id: None,
-                    })
-                    .unwrap_or_default(),
+                    serde_json::to_value(&a11y_job).unwrap_or_default(),
                     &state.db,
                     None,
                     None,

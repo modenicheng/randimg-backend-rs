@@ -165,12 +165,13 @@ pub async fn refresh_credential(
         .map_err(AppError::from)?
         .ok_or(AppError::NotFound("Credential not found".into()))?;
 
+    let refresh_job = RefreshPixivTokenJob { credential_id: id, parent_job_id: None };
     state
         .queue_backend
         .push_task(
+            &refresh_job,
             "refresh_pixiv_token",
-            serde_json::to_value(&RefreshPixivTokenJob { credential_id: id, parent_job_id: None })
-                .unwrap_or_default(),
+            serde_json::to_value(&refresh_job).unwrap_or_default(),
             &state.db,
             None,
             None,

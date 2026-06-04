@@ -27,9 +27,9 @@ pub struct WorkerState {
 
 /// Spawn fang workers for all job types. Returns handles for graceful shutdown.
 ///
-/// Uses fang's `AsyncWorkerPool` which auto-discovers `AsyncRunnable` impls
-/// via typetag. Each worker type is registered with its own concurrency level
-/// from `AppConfig`.
+/// Creates one `AsyncWorkerPool` per task type, each with its own concurrency level
+/// from `AppConfig`. The `.task_type()` setting ensures each pool only polls tasks
+/// matching its type string (e.g. "crawl", "download", "color_extract").
 ///
 /// `worker_handle`: Tokio runtime handle to spawn workers on. This allows isolating
 /// background workers from the HTTP runtime to prevent API starvation.
@@ -46,20 +46,35 @@ pub async fn spawn_workers(
     let queue: AsyncQueue = state.queue_backend.queue().clone();
     let mut handles = Vec::new();
 
-    // Create a worker pool — fang auto-discovers AsyncRunnable impls via typetag.
-    // The pool polls the fang_tasks table and dispatches to the matching handler.
-    let mut pool = AsyncWorkerPool::<AsyncQueue>::builder()
-        .number_of_workers(2u32)
-        .queue(queue)
-        .build();
+    let pool_configs: &[(&str, u32)] = &[
+        ("crawl", state.config.task_concurrency_crawl),
+        ("download", state.config.task_concurrency_download),
+        ("color_extract", state.config.task_concurrency_color_extract),
+        ("upload", state.config.task_concurrency_upload),
+        ("accessibility_check", state.config.task_concurrency_accessibility_check),
+        ("discover", state.config.task_concurrency_discover),
+        ("refresh_pixiv_token", state.config.task_concurrency_refresh_pixiv_token),
+    ];
 
-    tracing::info!("Spawning fang worker pool with 2 workers");
+    for &(task_type, concurrency) in pool_configs {
+        let mut pool = AsyncWorkerPool::<AsyncQueue>::builder()
+            .number_of_workers(concurrency)
+            .task_type(task_type)
+            .queue(queue.clone())
+            .build();
 
-    let handle = worker_handle.spawn(async move {
-        pool.start().await;
-    });
-    handles.push(handle);
+        tracing::info!(
+            task_type,
+            concurrency,
+            "Spawning fang worker pool"
+        );
 
-    tracing::info!(count = handles.len(), "Worker pool spawned");
+        let handle = worker_handle.spawn(async move {
+            pool.start().await;
+        });
+        handles.push(handle);
+    }
+
+    tracing::info!(count = handles.len(), "Worker pools spawned");
     handles
 }

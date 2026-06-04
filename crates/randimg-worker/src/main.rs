@@ -13,7 +13,7 @@
 use randimg_core::config::AppConfig;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
@@ -22,8 +22,8 @@ async fn main() {
     // 1. Load configuration
     let config = AppConfig::from_env();
 
-    // 2. Set up logging (simpler than server — env filter + compact format)
-    init_logging(&config);
+    // 2. Set up logging (stdout + optional file)
+    let _log_guard = init_logging(&config);
 
     tracing::info!("Starting randimg-worker");
 
@@ -98,31 +98,43 @@ async fn main() {
     tracing::info!(count = handles.len(), "All workers aborted, exiting");
 }
 
-/// Initialize tracing with env filter and compact format.
-fn init_logging(config: &AppConfig) {
+/// Initialize tracing with env filter, compact format on stdout, and JSON file output.
+///
+/// Logs always go to stdout (compact). When `log_dir` is non-empty, logs are also
+/// written to `{log_dir}/worker.log` as JSON (daily rotation).
+fn init_logging(config: &AppConfig) -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
+    let stdout_layer = tracing_subscriber::fmt::layer()
         .with_file(true)
         .with_line_number(true)
         .with_thread_ids(true)
         .with_target(true)
         .compact();
 
-    // Set up file appender if log_dir is configured
     if !config.log_dir.is_empty() {
         let file_appender = tracing_appender::rolling::daily(&config.log_dir, "worker.log");
-        let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-        // We need to leak the guard so it lives for the program duration
-        // This is intentional for the logging use case
-        Box::leak(Box::new(_guard));
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stdout_layer)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(non_blocking)
+                    .json(),
+            )
+            .init();
 
-        subscriber.with_writer(non_blocking).init();
+        Some(guard)
     } else {
-        subscriber.init();
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stdout_layer)
+            .init();
+
+        None
     }
 }
 

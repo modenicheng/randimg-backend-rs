@@ -144,6 +144,10 @@ async fn main() {
                     .worker
                     .queue_backend
                     .push_task(
+                        &randimg_core::task_queue::jobs::RefreshPixivTokenJob {
+                            credential_id: cred.id,
+                            parent_job_id: None,
+                        },
                         "refresh_pixiv_token",
                         serde_json::json!({"credential_id": cred.id}),
                         &state.worker.db,
