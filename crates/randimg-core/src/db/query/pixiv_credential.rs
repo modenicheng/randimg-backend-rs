@@ -64,6 +64,26 @@ pub async fn find_one_active_random(
         })
 }
 
+/// Find active credentials by a list of IDs.
+/// Returns only those that exist and have `STATUS_ACTIVE`.
+/// If `ids` is empty, returns all active credentials (same as find_one_active_random pool).
+pub async fn find_active_by_ids(
+    db: &DatabaseConnection,
+    ids: &[i32],
+) -> Result<Vec<pixiv_credential::Model>, DbErr> {
+    if ids.is_empty() {
+        return PixivCredential::find()
+            .filter(pixiv_credential::Column::Status.eq(pixiv_credential::STATUS_ACTIVE))
+            .all(db)
+            .await;
+    }
+    PixivCredential::find()
+        .filter(pixiv_credential::Column::Id.is_in(ids.to_vec()))
+        .filter(pixiv_credential::Column::Status.eq(pixiv_credential::STATUS_ACTIVE))
+        .all(db)
+        .await
+}
+
 /// Partial update — only sets fields that are Some.
 pub async fn update(
     db: &DatabaseConnection,

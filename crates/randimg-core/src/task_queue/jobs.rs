@@ -76,6 +76,11 @@ pub struct CrawlJob {
     /// Disable discover entirely for this crawl job. Default: false.
     #[serde(default)]
     pub disable_discover: Option<bool>,
+    /// Specific Pixiv credential IDs to use. If set, only these credentials
+    /// will be considered for authentication. If empty/None, falls back to
+    /// random active credential selection.
+    #[serde(default)]
+    pub credential_ids: Option<Vec<i32>>,
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
@@ -180,6 +185,9 @@ pub struct DiscoverJob {
     pub max_hops: Option<u32>,
     pub seed_limit: Option<u64>,
     pub seed_method: Option<String>,
+    /// Specific Pixiv credential IDs to use (inherited from parent CrawlJob).
+    #[serde(default)]
+    pub credential_ids: Option<Vec<i32>>,
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,

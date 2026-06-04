@@ -54,6 +54,9 @@ pub struct CreateCrawlerRequest {
     pub discover_seed_method: Option<String>,
     /// Disable discover entirely for this crawl job. Default: false.
     pub disable_discover: Option<bool>,
+    /// Specific Pixiv credential IDs to use. Required for bookmarks crawl (crawl_type=2).
+    /// For other crawl types, if empty/None, a random active credential is used.
+    pub credential_ids: Option<Vec<i32>>,
 }
 
 /// POST /crawler  Create crawler task
@@ -74,6 +77,17 @@ pub async fn create_crawler(
         return Err(AppError::BadRequest(
             "target_end_date and target_start_date is required for RANKING crawler".into(),
         ));
+    }
+    // Bookmarks crawl requires explicit credential_ids
+    if crawl_type == 2 {
+        match body.credential_ids.as_deref() {
+            None | Some(&[]) => {
+                return Err(AppError::BadRequest(
+                    "credential_ids is required for bookmarks crawl (crawl_type=2)".into(),
+                ));
+            }
+            _ => {}
+        }
     }
 
     let crawler = query::crawler::create(
@@ -107,6 +121,7 @@ pub async fn create_crawler(
         discover_seed_limit: body.discover_seed_limit,
         discover_seed_method: body.discover_seed_method,
         disable_discover: body.disable_discover,
+        credential_ids: body.credential_ids,
         parent_job_id: None,
         task_id: Some(task_id.clone()),
         max_retries: state.config.task_max_retries,
@@ -239,6 +254,7 @@ pub async fn trigger_discover(
         max_hops: body.max_hops,
         seed_limit: body.seed_limit,
         seed_method: body.seed_method,
+        credential_ids: None,
         parent_job_id: None,
         task_id: Some(task_id.clone()),
         root_job_id: None,

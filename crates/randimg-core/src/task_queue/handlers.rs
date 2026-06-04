@@ -63,6 +63,7 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
                 max_hops: job.discover_hops,
                 seed_limit: job.discover_seed_limit,
                 seed_method: job.discover_seed_method.clone(),
+                credential_ids: job.credential_ids.clone(),
                 parent_job_id: Some(current_id.clone()),
                 task_id: Some(discover_task_id.clone()),
                 root_job_id: Some(current_id.clone()),
@@ -253,8 +254,16 @@ async fn crawl_bookmarks(
         .await
         .ok_or("Not authenticated or no user_id")?;
 
-    let tags = job.target_search_prompt.as_deref();
+    let tags = job.target_search_prompt.as_deref().filter(|s| !s.is_empty());
     let max_pages = job.max_pages.unwrap_or(0);
+
+    tracing::info!(
+        user_id,
+        tags,
+        max_pages,
+        credential_id,
+        "Starting bookmarks crawl"
+    );
 
     let mut max_bookmark_id: Option<u64> = None;
     let mut pages_processed = 0u32;
@@ -931,13 +940,31 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
 
     // Authenticate Pixiv API: reuse stored token if valid, otherwise refresh
     let api = crate::pixiv::create_api(&state.config.pixiv_proxy, &state.config.pixiv_accept_lang).await;
-    let credential_id = if let Some(cred) = query::pixiv_credential::find_one_active_random(&state.db)
-        .await
-        .map_err(|e| format!("Failed to fetch credential: {}", e))?
-    {
-        crate::pixiv::auth_with_credential(&api, &cred, &state.db).await?
+    let credential_id = if let Some(ref ids) = job.credential_ids {
+        if !ids.is_empty() {
+            let creds = query::pixiv_credential::find_active_by_ids(&state.db, ids)
+                .await
+                .map_err(|e| format!("Failed to fetch credentials by IDs: {}", e))?;
+            if creds.is_empty() {
+                return Err(format!(
+                    "No active credentials found among specified IDs: {:?}", ids
+                ));
+            }
+            let cred = creds.into_iter().next().unwrap();
+            crate::pixiv::auth_with_credential(&api, &cred, &state.db).await?
+        } else {
+            let cred = query::pixiv_credential::find_one_active_random(&state.db)
+                .await
+                .map_err(|e| format!("Failed to fetch credential: {}", e))?
+                .ok_or("No active Pixiv credentials found")?;
+            crate::pixiv::auth_with_credential(&api, &cred, &state.db).await?
+        }
     } else {
-        return Err("No active Pixiv credentials found".into());
+        let cred = query::pixiv_credential::find_one_active_random(&state.db)
+            .await
+            .map_err(|e| format!("Failed to fetch credential: {}", e))?
+            .ok_or("No active Pixiv credentials found")?;
+        crate::pixiv::auth_with_credential(&api, &cred, &state.db).await?
     };
 
     let mut total_discovered = 0u32;
@@ -995,6 +1022,7 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
             max_hops: Some(max_hops),
             seed_limit: Some(seed_limit),
             seed_method: job.seed_method.clone(),
+            credential_ids: job.credential_ids.clone(),
             parent_job_id: Some(current_id.clone()),
             task_id: Some(next_discover_task_id.clone()),
             root_job_id: job.root_job_id.clone(),
