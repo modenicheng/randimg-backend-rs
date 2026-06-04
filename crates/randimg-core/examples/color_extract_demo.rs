@@ -59,27 +59,29 @@ fn main() {
     let (w, h) = img.dimensions();
 
     let t0 = Instant::now();
-    let scale = 0.5;
+    let max_dim = w.max(h) as f64;
+    let scale = if max_dim > 1024.0 { 1024.0 / max_dim } else { 0.5 };
     let new_w = ((w as f64 * scale) as u32).max(1);
     let new_h = ((h as f64 * scale) as u32).max(1);
     let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
     let rgb = small.to_rgb8();
     let resize_elapsed = t0.elapsed();
     println!(
-        "  resize ({}x{} -> {}x{}): {:?}",
-        w, h, new_w, new_h, resize_elapsed
+        "  resize ({}x{} -> {}x{}, scale={:.4}): {:?}",
+        w, h, new_w, new_h, scale, resize_elapsed
     );
 
     let pixels: Vec<[u8; 3]> = rgb.pixels().map(|p| [p[0], p[1], p[2]]).collect();
 
+    use rayon::prelude::*;
     let t1 = Instant::now();
     let lab_pixels: Vec<[f32; 3]> = pixels
-        .iter()
+        .par_iter()
         .map(|p| randimg_core::color::rgb_to_lab(p[0], p[1], p[2]))
         .collect();
     let lab_elapsed = t1.elapsed();
     println!(
-        "  RGB->LAB conversion ({} pixels): {:?}",
+        "  RGB->LAB conversion ({} pixels, par_iter): {:?}",
         lab_pixels.len(),
         lab_elapsed
     );

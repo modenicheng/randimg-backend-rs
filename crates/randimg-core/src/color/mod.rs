@@ -235,7 +235,7 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
         img: &DynamicImage,
         k: usize,
         max_iter: usize,
-        batch_size: usize,
+        _batch_size: usize,
         image_scale: f64,
     ) -> ThemeColors {
         run_on_color_pool(|| {
@@ -266,6 +266,9 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
             .map(|p| rgb_to_lab(p[0], p[1], p[2]))
             .collect();
 
+        // NOTE: 使用全量 KMeans 而非 mini-batch。Mini-batch 的 stride 采样会
+        // 遗漏稀疏像素（如点缀色），导致异常颜色进入调色板（如图片 680/773 的
+        // 幻影绿色）。全量模式 ~1.8s vs mini-batch ~6ms，但准确性优先。
         let (lab_centroids, counts) =
             kmeans::kmeans(&lab_pixels, k, max_iter, None, false);
 
