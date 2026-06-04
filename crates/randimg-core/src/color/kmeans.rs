@@ -185,6 +185,17 @@ fn mini_batch(
                 *a = nearest_centroid(point, centroids);
             }
         });
+
+    // Post-processing: use median for L channel (matches HyAB's |ΔL| component)
+    let mut l_values: Vec<Vec<f32>> = vec![Vec::new(); k];
+    for (point, &c) in data.iter().zip(assignments.iter()) {
+        l_values[c].push(point[0]);
+    }
+    for j in 0..k {
+        if !l_values[j].is_empty() {
+            centroids[j][0] = median(&mut l_values[j]);
+        }
+    }
 }
 
 #[inline]
@@ -277,6 +288,7 @@ fn par_accumulate(
 }
 
 /// Update centroids from accumulated sums/counts; reinitialize empty clusters.
+/// L channel (index 0) uses median; a/b channels (indices 1,2) use mean.
 fn update_centroids(
     centroids: &mut Vec<[f32; 3]>,
     sums: &[[f32; 3]],
@@ -284,10 +296,17 @@ fn update_centroids(
     data: &[[f32; 3]],
     assignments: &[usize],
 ) {
-    for j in 0..centroids.len() {
+    let k = centroids.len();
+    let mut l_values: Vec<Vec<f32>> = vec![Vec::new(); k];
+    for (point, &c) in data.iter().zip(assignments.iter()) {
+        l_values[c].push(point[0]);
+    }
+
+    for j in 0..k {
         if counts[j] > 0 {
             let n = counts[j] as f32;
-            centroids[j] = [sums[j][0] / n, sums[j][1] / n, sums[j][2] / n];
+            let l_median = median(&mut l_values[j]);
+            centroids[j] = [l_median, sums[j][1] / n, sums[j][2] / n];
         }
     }
     reinitialize_empty_centroids(
@@ -319,6 +338,19 @@ fn reinitialize_empty_centroids(
                 .unwrap_or(0);
             centroids[j] = data[farthest];
         }
+    }
+}
+
+fn median(values: &mut [f32]) -> f32 {
+    let n = values.len();
+    if n == 0 {
+        return 0.0;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if n % 2 == 0 {
+        (values[n / 2 - 1] + values[n / 2]) / 2.0
+    } else {
+        values[n / 2]
     }
 }
 
