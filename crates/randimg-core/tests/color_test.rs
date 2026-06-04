@@ -104,6 +104,47 @@ fn test_extract_theme_colors_handles_single_pixel() {
     // That's acceptable — the function should not panic
 }
 
+#[test]
+fn test_extract_theme_colors_filters_accent_colors() {
+    // Simulate image with 99% dark pixels and 1% bright accent pixels
+    // The accent cluster should be filtered out
+    let mut data = Vec::new();
+
+    // 990 dark pixels (cluster around L*=20)
+    for _ in 0..990 {
+        data.push([20.0, 0.0, 0.0]);
+    }
+
+    // 10 bright accent pixels (cluster around L*=90)
+    for _ in 0..10 {
+        data.push([90.0, 50.0, 50.0]);
+    }
+
+    let (_centroids, counts) = kmeans(&data, 3, 30, None, false);
+
+    // After filtering in extract_theme_colors, small clusters (<1% of total)
+    // should be removed. Here we verify the raw kmeans output first.
+    let total: usize = counts.iter().sum();
+    let min_size = total / 100; // 1% threshold
+
+    // At least one cluster should have fewer than min_size points
+    let has_small_cluster = counts.iter().any(|&c| c < min_size);
+    assert!(
+        has_small_cluster,
+        "Expected at least one small cluster (<{} points), got counts: {:?}",
+        min_size, counts
+    );
+
+    // The accent cluster (10 points) should be much smaller than min_size (10 points = 1%)
+    let accent_count = counts.iter().min().unwrap();
+    assert!(
+        *accent_count <= min_size,
+        "Smallest cluster should be <= {} points, got {}",
+        min_size,
+        accent_count
+    );
+}
+
 // ---- KMeans unit tests ----
 
 #[test]
@@ -117,7 +158,7 @@ fn test_kmeans_basic_clustering() {
         data.push([100.0, 100.0, 100.0]);
     }
 
-    let centroids = kmeans(&data, 2, 20, None);
+    let (centroids, _counts) = kmeans(&data, 2, 20, None, false);
 
     assert_eq!(centroids.len(), 2);
 
@@ -138,22 +179,22 @@ fn test_kmeans_basic_clustering() {
 
 #[test]
 fn test_kmeans_empty_input() {
-    let data: Vec<[f64; 3]> = vec![];
-    let centroids = kmeans(&data, 3, 10, None);
+    let data: Vec<[f32; 3]> = vec![];
+    let (centroids, _counts) = kmeans(&data, 3, 10, None, false);
     assert!(centroids.is_empty());
 }
 
 #[test]
 fn test_kmeans_k_zero() {
     let data = vec![[1.0, 2.0, 3.0]; 10];
-    let centroids = kmeans(&data, 0, 10, None);
+    let (centroids, _counts) = kmeans(&data, 0, 10, None, false);
     assert!(centroids.is_empty());
 }
 
 #[test]
 fn test_kmeans_k_larger_than_data() {
     let data = vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
-    let centroids = kmeans(&data, 5, 10, None);
+    let (centroids, _counts) = kmeans(&data, 5, 10, None, false);
     // When k > data.len(), centroids are padded by duplicating data points
     assert_eq!(
         centroids.len(),
@@ -184,7 +225,7 @@ fn test_kmeans_empty_cluster_recovery() {
     data.push([1000.0, 1000.0, 1000.0]);
     data.push([1001.0, 1001.0, 1001.0]);
 
-    let centroids = kmeans(&data, 3, 30, None);
+    let (centroids, _counts) = kmeans(&data, 3, 30, None, false);
     assert_eq!(centroids.len(), 3);
 
     // All three centroids should be distinct (empty cluster recovery kicks in)
@@ -208,7 +249,7 @@ fn test_kmeans_mini_batch() {
         data.push([50.0, 50.0, 50.0]);
     }
 
-    let centroids = kmeans(&data, 2, 50, Some(100));
+    let (centroids, _counts) = kmeans(&data, 2, 50, Some(100), false);
 
     assert_eq!(centroids.len(), 2);
     let mut sorted = centroids.clone();
@@ -227,12 +268,113 @@ fn test_kmeans_mini_batch() {
 
 #[test]
 fn test_kmeans_produces_correct_k() {
-    let data: Vec<[f64; 3]> = (0..100).map(|i| [i as f64, 0.0, 0.0]).collect();
+    let data: Vec<[f32; 3]> = (0..100).map(|i| [i as f32, 0.0, 0.0]).collect();
 
     for k in [1, 3, 5, 10] {
-        let centroids = kmeans(&data, k, 20, None);
+        let (centroids, _counts) = kmeans(&data, k, 20, None, false);
         assert_eq!(centroids.len(), k, "k={} should produce {} centroids", k, k);
     }
+}
+
+#[test]
+fn test_median_centroid_updates_l_channel() {
+    // Test that L channel uses median (not mean) for centroid update.
+    // HyAB distance treats L* as separable; median minimizes L1 |ΔL| component.
+    //
+    // Cluster 0: L = [10, 20, 30, 40, 200] → median = 30, mean = 60
+    // Cluster 1: L = [60, 70, 80, 90, 300] → median = 80, mean = 120
+    // If median is used, centroids[0][0] ≈ 30, centroids[1][0] ≈ 80
+    // If mean is used, centroids[0][0] ≈ 60, centroids[1][0] ≈ 120
+    let mut data = Vec::new();
+    // Cluster 0 (clearly separated in L and a/b space)
+    data.push([10.0, 0.0, 0.0]);
+    data.push([20.0, 0.0, 0.0]);
+    data.push([30.0, 0.0, 0.0]);
+    data.push([40.0, 0.0, 0.0]);
+    data.push([200.0, 0.0, 0.0]);
+    // Cluster 1
+    data.push([60.0, 100.0, 100.0]);
+    data.push([70.0, 100.0, 100.0]);
+    data.push([80.0, 100.0, 100.0]);
+    data.push([90.0, 100.0, 100.0]);
+    data.push([300.0, 100.0, 100.0]);
+
+    let (centroids, _counts) = kmeans(&data, 2, 50, None, false);
+    assert_eq!(centroids.len(), 2);
+
+    // Identify which centroid is cluster 0 (lower a/b) vs cluster 1 (higher a/b)
+    let (c0, c1) = if centroids[0][1] < centroids[1][1] {
+        (&centroids[0], &centroids[1])
+    } else {
+        (&centroids[1], &centroids[0])
+    };
+
+    // L channel should use median: cluster 0 median=30, cluster 1 median=80
+    // Allow tolerance for kmeans convergence (outlier at 200/300 may shift slightly)
+    assert!(
+        (c0[0] - 30.0).abs() < 15.0,
+        "Cluster 0 centroid L should be ~30 (median), got {} (mean would be 60)",
+        c0[0]
+    );
+    assert!(
+        (c1[0] - 80.0).abs() < 15.0,
+        "Cluster 1 centroid L should be ~80 (median), got {} (mean would be 120)",
+        c1[0]
+    );
+
+    // a/b channels should still use mean (no special handling)
+    // Cluster 0: a/b mean = (0, 0), cluster 1: a/b mean = (100, 100)
+    assert!(
+        c0[1].abs() < 5.0 && c0[2].abs() < 5.0,
+        "Cluster 0 a/b should be near (0,0), got ({}, {})",
+        c0[1],
+        c0[2]
+    );
+    assert!(
+        (c1[1] - 100.0).abs() < 5.0 && (c1[2] - 100.0).abs() < 5.0,
+        "Cluster 1 a/b should be near (100,100), got ({}, {})",
+        c1[1],
+        c1[2]
+    );
+}
+
+// ---- Hamerly pruning test ----
+
+#[test]
+fn test_hamerly_skips_unchanged_points() {
+    let mut data = Vec::new();
+    for _ in 0..100 {
+        data.push([0.0, 0.0, 0.0]);
+    }
+    for _ in 0..100 {
+        data.push([100.0, 100.0, 100.0]);
+    }
+
+    randimg_core::color::kmeans::reset_hamerly_skips();
+
+    let (centroids, _counts) = kmeans(&data, 2, 20, None, true);
+
+    assert_eq!(centroids.len(), 2);
+
+    let mut sorted = centroids.clone();
+    sorted.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
+    assert!(
+        sorted[0][0] < 10.0,
+        "First centroid should be near 0, got {:?}",
+        sorted[0]
+    );
+    assert!(
+        sorted[1][0] > 90.0,
+        "Second centroid should be near 100, got {:?}",
+        sorted[1]
+    );
+
+    let skips = randimg_core::color::kmeans::hamerly_skip_count();
+    assert!(
+        skips > 0,
+        "Hamerly should skip some distance computations, got {} skips",
+        skips
+    );
 }
 
 // ---- Lab conversion round-trip test ----
@@ -307,7 +449,7 @@ fn perceived_brightness(c: [u8; 3]) -> u32 {
     (c[0] as u32 * 299 + c[1] as u32 * 587 + c[2] as u32 * 114) / 1000
 }
 
-fn euclidean_sq_arr(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+fn euclidean_sq_arr(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     let dx = a[0] - b[0];
     let dy = a[1] - b[1];
     let dz = a[2] - b[2];

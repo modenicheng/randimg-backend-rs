@@ -89,6 +89,10 @@ path = "examples/color_extract_demo.rs"
 name = "oss_upload_demo"
 path = "examples/oss_upload_demo.rs"
 
+[[example]]
+name = "remove_placeholder_images"
+path = "examples/remove_placeholder_images.rs"
+
 [dev-dependencies]
 reqwest = { workspace = true }
 serde_json = { workspace = true }
@@ -96,3 +100,9 @@ tokio = { workspace = true }
 sea-orm = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 http-body-util = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+md5 = "0.7"
+
+[[bench]]
+name = "color_benchmark"
+harness = false

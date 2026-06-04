@@ -68,6 +68,11 @@ pub struct AppConfig {
     // Color worker process isolation
     pub color_worker_rayon_threads: usize,
     pub color_worker_standalone: bool,
+    // Color extraction parameters
+    pub color_extract_k: usize,
+    pub color_extract_max_iter: usize,
+    pub color_extract_batch_size: usize,
+    pub color_extract_image_scale: f64,
     // CORS
     pub cors_origins: String,
 
@@ -149,6 +154,22 @@ impl AppConfig {
             color_worker_standalone: env::var("COLOR_WORKER_STANDALONE")
                 .map(|v| v == "1" || v == "true")
                 .unwrap_or(false),
+            color_extract_k: env::var("COLOR_EXTRACT_K")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            color_extract_max_iter: env::var("COLOR_EXTRACT_MAX_ITER")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50),
+            color_extract_batch_size: env::var("COLOR_EXTRACT_BATCH_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2048),
+            color_extract_image_scale: env::var("COLOR_EXTRACT_IMAGE_SCALE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.5),
             cors_origins: env::var("CORS_ORIGINS").unwrap_or_else(|_| "*".into()),
 
             // Fang 任务调度配置
