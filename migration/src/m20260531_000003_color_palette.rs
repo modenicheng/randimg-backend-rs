@@ -10,15 +10,15 @@ impl MigrationTrait for Migration {
 
         // ========== 1. images 表新增主色 LAB 字段 ==========
         db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN primary_l REAL"
+            "ALTER TABLE images ADD COLUMN primary_l DOUBLE PRECISION"
         ).await?;
 
         db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN primary_a REAL"
+            "ALTER TABLE images ADD COLUMN primary_a DOUBLE PRECISION"
         ).await?;
 
         db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN primary_b REAL"
+            "ALTER TABLE images ADD COLUMN primary_b DOUBLE PRECISION"
         ).await?;
 
         // 回填已有数据：从 colors JSON 中提取 primary_color 并转换为 LAB
