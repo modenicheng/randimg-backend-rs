@@ -29,7 +29,7 @@ fn bench_kmeans_iterations(c: &mut Criterion) {
             &batch_size,
             |b, &bs| {
                 b.iter(|| {
-                    black_box(kmeans(black_box(&data), 10, 50, bs));
+                    black_box(kmeans(black_box(&data), 10, 50, bs, false));
                 })
             },
         );

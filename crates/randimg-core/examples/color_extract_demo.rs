@@ -85,7 +85,7 @@ fn main() {
     );
 
     let t2 = Instant::now();
-    let _centroids = randimg_core::color::kmeans::kmeans(&lab_pixels, 10, 50, Some(2048));
+    let _centroids = randimg_core::color::kmeans::kmeans(&lab_pixels, 10, 50, Some(2048), false);
     let kmeans_elapsed = t2.elapsed();
     println!("  KMeans (k=10, batch=2048, 50 iter): {:?}", kmeans_elapsed);
 

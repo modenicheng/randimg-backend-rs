@@ -260,7 +260,7 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
             .collect();
 
         // KMeans clustering in LAB space
-        let lab_centroids = kmeans::kmeans(&lab_pixels, 10, 50, Some(2048));
+        let lab_centroids = kmeans::kmeans(&lab_pixels, 10, 50, Some(2048), false);
 
         // Sort by L* (lightness)
         let mut sorted_lab = lab_centroids;

@@ -1,4 +1,22 @@
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static HAMERLY_SKIPS: AtomicUsize = AtomicUsize::new(0);
+
+#[doc(hidden)]
+pub fn hamerly_skip_count() -> usize {
+    HAMERLY_SKIPS.load(Ordering::Relaxed)
+}
+
+#[doc(hidden)]
+pub fn reset_hamerly_skips() {
+    HAMERLY_SKIPS.store(0, Ordering::Relaxed);
+}
+
+struct PointBounds {
+    upper: Vec<f32>,
+    lower: Vec<f32>,
+}
 
 /// KMeans with KMeans++ init, empty-cluster recovery, mini-batch, and rayon parallelism.
 ///
@@ -12,6 +30,7 @@ pub fn kmeans(
     k: usize,
     max_iter: usize,
     batch_size: Option<usize>,
+    hamerly: bool,
 ) -> Vec<[f32; 3]> {
     if data.is_empty() || k == 0 {
         return vec![];
@@ -32,7 +51,7 @@ pub fn kmeans(
 
     match batch_size {
         Some(bs) => mini_batch(data, &mut centroids, &mut assignments, k, max_iter, bs),
-        None => full_batch(data, &mut centroids, &mut assignments, k, max_iter),
+        None => full_batch(data, &mut centroids, &mut assignments, k, max_iter, hamerly),
     }
 
     centroids
@@ -83,6 +102,134 @@ fn kmeans_pp_init(data: &[[f32; 3]], k: usize) -> Vec<[f32; 3]> {
     centroids
 }
 
+fn init_bounds(data: &[[f32; 3]], centroids: &[[f32; 3]], assignments: &[usize]) -> PointBounds {
+    let n = data.len();
+    let k = centroids.len();
+    let mut bounds = PointBounds {
+        upper: vec![0.0; n],
+        lower: vec![f32::MAX; n],
+    };
+
+    data.par_iter()
+        .zip(assignments.par_iter())
+        .zip(bounds.upper.par_iter_mut().zip(bounds.lower.par_iter_mut()))
+        .for_each(|((point, _assigned), (upper, lower))| {
+            let mut min1 = f32::MAX;
+            let mut min2 = f32::MAX;
+            for (_j, c) in centroids.iter().enumerate() {
+                let d = hyab_dist(point, c);
+                if d < min1 {
+                    min2 = min1;
+                    min1 = d;
+                } else if d < min2 {
+                    min2 = d;
+                }
+            }
+            *upper = min1;
+            *lower = if k > 1 { min2 } else { 0.0 };
+        });
+
+    bounds
+}
+
+fn hamerly_assign(
+    data: &[[f32; 3]],
+    centroids: &[[f32; 3]],
+    assignments: &mut [usize],
+    bounds: &mut PointBounds,
+) -> bool {
+    let k = centroids.len();
+    if k <= 1 {
+        return false;
+    }
+
+    let pairwise_dists: Vec<f32> = (0..k)
+        .flat_map(|i| {
+            (0..k)
+                .map(move |j| if i == j { 0.0 } else { hyab_dist(&centroids[i], &centroids[j]) })
+        })
+        .collect();
+
+    let chunk_size = 4096;
+    let changed = data
+        .par_chunks(chunk_size)
+        .zip(assignments.par_chunks_mut(chunk_size))
+        .zip(bounds.upper.par_chunks_mut(chunk_size))
+        .zip(bounds.lower.par_chunks_mut(chunk_size))
+        .enumerate()
+        .map(|(_chunk_idx, (((data_chunk, assign_chunk), upper_chunk), lower_chunk))| {
+            let mut local_changed = false;
+
+            for (i_local, point) in data_chunk.iter().enumerate() {
+                let assigned = assign_chunk[i_local];
+
+                let min_dist_to_other = (0..k)
+                    .filter(|&j| j != assigned)
+                    .map(|j| pairwise_dists[assigned * k + j])
+                    .fold(f32::MAX, f32::min);
+                let p = 0.5 * min_dist_to_other;
+
+                if upper_chunk[i_local] <= p {
+                    HAMERLY_SKIPS.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+
+                let mut min1 = f32::MAX;
+                let mut min2 = f32::MAX;
+                let mut best = 0;
+                for (j, c) in centroids.iter().enumerate() {
+                    let d = hyab_dist(point, c);
+                    if d < min1 {
+                        min2 = min1;
+                        min1 = d;
+                        best = j;
+                    } else if d < min2 {
+                        min2 = d;
+                    }
+                }
+
+                upper_chunk[i_local] = min1;
+                lower_chunk[i_local] = min2;
+
+                if assign_chunk[i_local] != best {
+                    assign_chunk[i_local] = best;
+                    local_changed = true;
+                }
+            }
+            local_changed
+        })
+        .reduce(|| false, |a, b| a || b);
+
+    changed
+}
+
+fn update_bounds_after_centroid_move(
+    bounds: &mut PointBounds,
+    assignments: &[usize],
+    old_centroids: &[[f32; 3]],
+    new_centroids: &[[f32; 3]],
+) {
+    let movements: Vec<f32> = old_centroids
+        .iter()
+        .zip(new_centroids.iter())
+        .map(|(old, new)| hyab_dist(old, new))
+        .collect();
+    let max_movement = movements.iter().cloned().fold(0.0f32, f32::max);
+
+    bounds
+        .upper
+        .par_iter_mut()
+        .zip(bounds.lower.par_iter_mut())
+        .zip(assignments.par_iter())
+        .for_each(|((upper, lower), &assigned)| {
+            *upper += movements[assigned];
+            *lower -= max_movement;
+            if *lower < 0.0 {
+                *lower = 0.0;
+            }
+        });
+}
+
 /// Full-batch KMeans with rayon parallelism.
 fn full_batch(
     data: &[[f32; 3]],
@@ -90,34 +237,48 @@ fn full_batch(
     assignments: &mut [usize],
     k: usize,
     max_iter: usize,
+    hamerly: bool,
 ) {
-    for _ in 0..max_iter {
-        // Parallel assignment: each chunk of points finds its nearest centroid
-        let changed = assignments
-            .par_chunks_mut(4096)
-            .zip(data.par_chunks(4096))
-            .map(|(assign_chunk, data_chunk)| {
-                let mut local_changed = false;
-                for (a, point) in assign_chunk.iter_mut().zip(data_chunk.iter()) {
-                    let best = nearest_centroid(point, centroids);
-                    if *a != best {
-                        *a = best;
-                        local_changed = true;
-                    }
-                }
-                local_changed
-            })
-            .reduce(|| false, |a, b| a || b);
+    if hamerly {
+        let mut bounds = init_bounds(data, centroids, assignments);
 
-        if !changed {
-            break;
+        for _ in 0..max_iter {
+            let old_centroids = centroids.clone();
+            let changed = hamerly_assign(data, centroids, assignments, &mut bounds);
+
+            if !changed {
+                break;
+            }
+
+            let (sums, counts) = par_accumulate(data, assignments, k);
+            update_centroids(centroids, &sums, &counts, data, assignments);
+            update_bounds_after_centroid_move(&mut bounds, assignments, &old_centroids, centroids);
         }
+    } else {
+        for _ in 0..max_iter {
+            let changed = assignments
+                .par_chunks_mut(4096)
+                .zip(data.par_chunks(4096))
+                .map(|(assign_chunk, data_chunk)| {
+                    let mut local_changed = false;
+                    for (a, point) in assign_chunk.iter_mut().zip(data_chunk.iter()) {
+                        let best = nearest_centroid(point, centroids);
+                        if *a != best {
+                            *a = best;
+                            local_changed = true;
+                        }
+                    }
+                    local_changed
+                })
+                .reduce(|| false, |a, b| a || b);
 
-        // Parallel centroid accumulation
-        let (sums, counts) = par_accumulate(data, assignments, k);
+            if !changed {
+                break;
+            }
 
-        // Update centroids, reinitialize empty clusters
-        update_centroids(centroids, &sums, &counts, data, assignments);
+            let (sums, counts) = par_accumulate(data, assignments, k);
+            update_centroids(centroids, &sums, &counts, data, assignments);
+        }
     }
 }
 
