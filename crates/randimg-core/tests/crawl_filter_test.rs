@@ -72,6 +72,8 @@ fn test_crawl_job_serialization_with_filters() {
         parent_job_id: None,
         disable_discover: None,
         task_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
 
     let json = serde_json::to_string(&job).unwrap();
@@ -105,6 +107,8 @@ fn test_crawl_job_empty_illust_type_filter() {
         parent_job_id: None,
         disable_discover: None,
         task_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
 
     let json = serde_json::to_string(&job).unwrap();

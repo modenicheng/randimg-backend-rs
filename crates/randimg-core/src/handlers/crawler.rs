@@ -109,6 +109,8 @@ pub async fn create_crawler(
         disable_discover: body.disable_discover,
         parent_job_id: None,
         task_id: Some(task_id.clone()),
+        max_retries: state.config.task_max_retries,
+        backoff_base: state.config.task_backoff_base,
     };
     state
         .queue_backend
@@ -186,6 +188,8 @@ pub async fn get_crawler_image(
                 image_path: img.image_path,
                 parent_job_id: None,
                 task_id: Some(task_id.clone()),
+                max_retries: 0,  // CPU-bound, no retry
+                backoff_base: state.config.task_backoff_base,
             };
             state
                 .queue_backend
@@ -237,6 +241,9 @@ pub async fn trigger_discover(
         seed_method: body.seed_method,
         parent_job_id: None,
         task_id: Some(task_id.clone()),
+        root_job_id: None,
+        max_retries: state.config.task_max_retries,
+        backoff_base: state.config.task_backoff_base,
     };
     state
         .queue_backend
@@ -283,6 +290,8 @@ pub async fn get_accessibility_queue(
                 image_path: img.image_path,
                 parent_job_id: None,
                 task_id: Some(task_id.clone()),
+                max_retries: state.config.task_max_retries,
+                backoff_base: state.config.task_backoff_base,
             };
             state
                 .queue_backend

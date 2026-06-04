@@ -13,6 +13,9 @@ use crate::db::entities::task;
 use crate::db::query;
 use super::handlers;
 
+fn default_max_retries() -> i32 { 3 }
+fn default_backoff_base() -> u32 { 2 }
+
 // ── Global WorkerState accessor ────────────────────────────────
 
 static WORKER_STATE: OnceCell<Arc<WorkerState>> = OnceCell::const_new();
@@ -79,6 +82,12 @@ pub struct CrawlJob {
     /// Custom task ID for status tracking
     #[serde(default)]
     pub task_id: Option<String>,
+    /// Maximum retry attempts (0 = no retry). Populated from AppConfig.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: i32,
+    /// Backoff base in seconds for exponential retry. Populated from AppConfig.
+    #[serde(default = "default_backoff_base")]
+    pub backoff_base: u32,
 }
 
 /// Download a single image from Pixiv to local disk.
@@ -99,6 +108,12 @@ pub struct DownloadJob {
     /// Custom task ID for status tracking
     #[serde(default)]
     pub task_id: Option<String>,
+    /// Maximum retry attempts (0 = no retry). Populated from AppConfig.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: i32,
+    /// Backoff base in seconds for exponential retry. Populated from AppConfig.
+    #[serde(default = "default_backoff_base")]
+    pub backoff_base: u32,
 }
 
 /// Extract color palette from a downloaded image.
@@ -112,6 +127,12 @@ pub struct ColorExtractJob {
     /// Custom task ID for status tracking
     #[serde(default)]
     pub task_id: Option<String>,
+    /// Maximum retry attempts (0 = no retry). Populated from AppConfig.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: i32,
+    /// Backoff base in seconds for exponential retry. Populated from AppConfig.
+    #[serde(default = "default_backoff_base")]
+    pub backoff_base: u32,
 }
 
 /// Upload a downloaded image to DogeCloud OSS.
@@ -125,6 +146,12 @@ pub struct UploadJob {
     /// Custom task ID for status tracking
     #[serde(default)]
     pub task_id: Option<String>,
+    /// Maximum retry attempts (0 = no retry). Populated from AppConfig.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: i32,
+    /// Backoff base in seconds for exponential retry. Populated from AppConfig.
+    #[serde(default = "default_backoff_base")]
+    pub backoff_base: u32,
 }
 
 /// Check image accessibility (solid-color detection stub).
@@ -138,6 +165,12 @@ pub struct AccessibilityCheckJob {
     /// Custom task ID for status tracking
     #[serde(default)]
     pub task_id: Option<String>,
+    /// Maximum retry attempts (0 = no retry). Populated from AppConfig.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: i32,
+    /// Backoff base in seconds for exponential retry. Populated from AppConfig.
+    #[serde(default = "default_backoff_base")]
+    pub backoff_base: u32,
 }
 
 /// Discover related illustrations via Pixiv related-illust API.
@@ -153,6 +186,16 @@ pub struct DiscoverJob {
     /// Custom task ID for status tracking
     #[serde(default)]
     pub task_id: Option<String>,
+    /// The ID of the root crawl job that originated this discovery chain.
+    /// Used to maintain flat tree hierarchy for API pagination.
+    #[serde(default)]
+    pub root_job_id: Option<String>,
+    /// Maximum retry attempts (0 = no retry). Populated from AppConfig.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: i32,
+    /// Backoff base in seconds for exponential retry. Populated from AppConfig.
+    #[serde(default = "default_backoff_base")]
+    pub backoff_base: u32,
 }
 
 /// Refresh a Pixiv credential's OAuth token.
@@ -165,6 +208,12 @@ pub struct RefreshPixivTokenJob {
     /// Custom task ID for status tracking
     #[serde(default)]
     pub task_id: Option<String>,
+    /// Maximum retry attempts (0 = no retry). Populated from AppConfig.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: i32,
+    /// Backoff base in seconds for exponential retry. Populated from AppConfig.
+    #[serde(default = "default_backoff_base")]
+    pub backoff_base: u32,
 }
 
 // ── AsyncRunnable implementations ──────────────────────────────
@@ -216,11 +265,11 @@ impl AsyncRunnable for CrawlJob {
     }
 
     fn max_retries(&self) -> i32 {
-        3
+        self.max_retries
     }
 
     fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(2, attempt)
+        u32::pow(self.backoff_base, attempt)
     }
 }
 
@@ -271,11 +320,11 @@ impl AsyncRunnable for DownloadJob {
     }
 
     fn max_retries(&self) -> i32 {
-        3
+        self.max_retries
     }
 
     fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(2, attempt)
+        u32::pow(self.backoff_base, attempt)
     }
 }
 
@@ -326,11 +375,11 @@ impl AsyncRunnable for ColorExtractJob {
     }
 
     fn max_retries(&self) -> i32 {
-        3
+        self.max_retries
     }
 
     fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(2, attempt)
+        u32::pow(self.backoff_base, attempt)
     }
 }
 
@@ -381,11 +430,11 @@ impl AsyncRunnable for UploadJob {
     }
 
     fn max_retries(&self) -> i32 {
-        3
+        self.max_retries
     }
 
     fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(2, attempt)
+        u32::pow(self.backoff_base, attempt)
     }
 }
 
@@ -436,11 +485,11 @@ impl AsyncRunnable for AccessibilityCheckJob {
     }
 
     fn max_retries(&self) -> i32 {
-        3
+        self.max_retries
     }
 
     fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(2, attempt)
+        u32::pow(self.backoff_base, attempt)
     }
 }
 
@@ -491,11 +540,11 @@ impl AsyncRunnable for DiscoverJob {
     }
 
     fn max_retries(&self) -> i32 {
-        3
+        self.max_retries
     }
 
     fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(2, attempt)
+        u32::pow(self.backoff_base, attempt)
     }
 }
 
@@ -546,10 +595,10 @@ impl AsyncRunnable for RefreshPixivTokenJob {
     }
 
     fn max_retries(&self) -> i32 {
-        3
+        self.max_retries
     }
 
     fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(2, attempt)
+        u32::pow(self.backoff_base, attempt)
     }
 }

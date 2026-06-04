@@ -149,6 +149,8 @@ async fn main() {
                             credential_id: cred.id,
                             parent_job_id: None,
                             task_id: Some(refresh_task_id.clone()),
+                            max_retries: state.worker.config.task_max_retries,
+                            backoff_base: state.worker.config.task_backoff_base,
                         },
                         "refresh_pixiv_token",
                         serde_json::json!({"credential_id": cred.id}),

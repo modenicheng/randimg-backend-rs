@@ -23,6 +23,8 @@ fn test_crawl_job_roundtrip() {
         illust_type_filter: None,
         disable_discover: None,
         task_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: CrawlJob = serde_json::from_str(&json).unwrap();
@@ -49,6 +51,8 @@ fn test_download_job_roundtrip() {
         parent_job_id: None,
         root_job_id: None,
         task_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: DownloadJob = serde_json::from_str(&json).unwrap();
@@ -65,6 +69,8 @@ fn test_color_extract_job_roundtrip() {
         image_path: "/data/images/10.jpg".into(),
         parent_job_id: None,
         task_id: None,
+        max_retries: 0,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: ColorExtractJob = serde_json::from_str(&json).unwrap();
@@ -80,6 +86,8 @@ fn test_upload_job_roundtrip() {
         image_path: "/data/images/5.jpg".into(),
         parent_job_id: None,
         task_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: UploadJob = serde_json::from_str(&json).unwrap();
@@ -94,6 +102,8 @@ fn test_accessibility_check_job_roundtrip() {
         image_path: "/data/images/7.jpg".into(),
         parent_job_id: None,
         task_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: AccessibilityCheckJob = serde_json::from_str(&json).unwrap();
@@ -110,6 +120,9 @@ fn test_discover_job_roundtrip() {
         seed_method: Some("popularity".into()),
         parent_job_id: Some("parent-uuid-123".into()),
         task_id: None,
+        root_job_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: DiscoverJob = serde_json::from_str(&json).unwrap();
@@ -129,6 +142,9 @@ fn test_discover_job_optional_fields_none() {
         seed_method: None,
         parent_job_id: None,
         task_id: None,
+        root_job_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: DiscoverJob = serde_json::from_str(&json).unwrap();
@@ -145,6 +161,8 @@ fn test_refresh_pixiv_token_job_roundtrip() {
         credential_id: 99,
         parent_job_id: None,
         task_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: RefreshPixivTokenJob = serde_json::from_str(&json).unwrap();
@@ -179,6 +197,8 @@ fn test_job_structs_are_clone() {
         parent_job_id: None,
         root_job_id: None,
         task_id: None,
+        max_retries: 3,
+        backoff_base: 2,
     };
     let cloned = job.clone();
     assert_eq!(cloned.image_id, 1);
@@ -220,6 +240,8 @@ fn test_parent_job_id_roundtrip() {
         illust_type_filter: None,
         disable_discover: None,
         task_id: Some("task-uuid-xyz".into()),
+        max_retries: 3,
+        backoff_base: 2,
     };
     let json = serde_json::to_string(&job).unwrap();
     assert!(json.contains("parent-uuid-abc"));

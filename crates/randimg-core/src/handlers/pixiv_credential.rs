@@ -171,6 +171,8 @@ pub async fn refresh_credential(
         credential_id: id,
         parent_job_id: None,
         task_id: Some(task_id.clone()),
+        max_retries: state.config.task_max_retries,
+        backoff_base: state.config.task_backoff_base,
     };
     state
         .queue_backend

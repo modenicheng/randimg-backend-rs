@@ -15,7 +15,7 @@ use super::jobs::*;
 
 /// Crawl Pixiv illustrations (by user, ranking, or bookmarks).
 pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(), String> {
-    let current_id = uuid::Uuid::new_v4().to_string();
+    let current_id = job.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let crawl_type = job.crawl_type;
     let crawler_id = job.crawler_id;
 
@@ -65,16 +65,17 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
                 seed_method: job.discover_seed_method.clone(),
                 parent_job_id: Some(current_id.clone()),
                 task_id: Some(discover_task_id.clone()),
+                root_job_id: Some(current_id.clone()),
+                max_retries: state.config.task_max_retries,
+                backoff_base: state.config.task_backoff_base,
             };
             let metadata = serde_json::to_value(&discover_job)
                 .map_err(|e| format!("Failed to serialize discover job: {}", e))?;
-            if let Err(e) = state
+            state
                 .queue_backend
                 .push_task(&discover_job, "discover", metadata, &state.db, Some(&current_id), Some(&current_id), None, None, Some(&discover_task_id))
                 .await
-            {
-                tracing::error!("Failed to submit discover task after crawl: {}", e);
-            }
+                .map_err(|e| format!("Failed to submit discover task: {}", e))?;
             } // end discover check
         }
         Err(_) => {
@@ -132,6 +133,8 @@ async fn crawl_ranking(
                     parent_job_id: Some(parent_id.to_string()),
                     root_job_id: Some(parent_id.to_string()),
                     task_id: Some(download_task_id.clone()),
+                    max_retries: state.config.task_max_retries,
+                    backoff_base: state.config.task_backoff_base,
                 };
                 let metadata = serde_json::to_value(&download_job)
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
@@ -210,6 +213,8 @@ async fn crawl_user(
                     parent_job_id: Some(parent_id.to_string()),
                     root_job_id: Some(parent_id.to_string()),
                     task_id: Some(download_task_id.clone()),
+                    max_retries: state.config.task_max_retries,
+                    backoff_base: state.config.task_backoff_base,
                 };
                 let metadata = serde_json::to_value(&download_job)
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
@@ -286,6 +291,8 @@ async fn crawl_bookmarks(
                     parent_job_id: Some(parent_id.to_string()),
                     root_job_id: Some(parent_id.to_string()),
                     task_id: Some(download_task_id.clone()),
+                    max_retries: state.config.task_max_retries,
+                    backoff_base: state.config.task_backoff_base,
                 };
                 let metadata = serde_json::to_value(&download_job)
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
@@ -540,20 +547,22 @@ async fn mark_downloaded(db: &sea_orm::DatabaseConnection, image_id: i32) -> Res
 }
 
 /// Spawn downstream pipeline tasks (color extract, upload, accessibility check)
-/// as children of the root crawl job.
+/// as children of the download task (not the root crawl job).
 async fn spawn_downstream_children(
     job: &DownloadJob,
     current_id: &str,
     state: &WorkerState,
-) {
+) -> Result<(), String> {
     let upstream_id = job.root_job_id.as_deref().unwrap_or(current_id);
 
     let color_task_id = uuid::Uuid::new_v4().to_string();
     let color_job = ColorExtractJob {
         image_id: job.image_id,
         image_path: job.image_path.clone(),
-        parent_job_id: Some(upstream_id.to_string()),
+        parent_job_id: Some(current_id.to_string()),
         task_id: Some(color_task_id.clone()),
+        max_retries: 0,  // CPU-bound, no retry
+        backoff_base: state.config.task_backoff_base,
     };
     let color_metadata = serde_json::to_value(&color_job).unwrap();
 
@@ -561,8 +570,10 @@ async fn spawn_downstream_children(
     let upload_job = UploadJob {
         image_id: job.image_id,
         image_path: job.image_path.clone(),
-        parent_job_id: Some(upstream_id.to_string()),
+        parent_job_id: Some(current_id.to_string()),
         task_id: Some(upload_task_id.clone()),
+        max_retries: state.config.task_max_retries,
+        backoff_base: state.config.task_backoff_base,
     };
     let upload_metadata = serde_json::to_value(&upload_job).unwrap();
 
@@ -570,37 +581,34 @@ async fn spawn_downstream_children(
     let a11y_job = AccessibilityCheckJob {
         image_id: job.image_id,
         image_path: job.image_path.clone(),
-        parent_job_id: Some(upstream_id.to_string()),
+        parent_job_id: Some(current_id.to_string()),
         task_id: Some(a11y_task_id.clone()),
+        max_retries: state.config.task_max_retries,
+        backoff_base: state.config.task_backoff_base,
     };
     let a11y_metadata = serde_json::to_value(&a11y_job).unwrap();
 
     let color_fut = state.queue_backend.push_task(
-        &color_job, "color_extract", color_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id), Some(&color_task_id),
+        &color_job, "color_extract", color_metadata, &state.db, Some(current_id), Some(upstream_id), None, Some(job.image_id), Some(&color_task_id),
     );
     let upload_fut = state.queue_backend.push_task(
-        &upload_job, "upload", upload_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id), Some(&upload_task_id),
+        &upload_job, "upload", upload_metadata, &state.db, Some(current_id), Some(upstream_id), None, Some(job.image_id), Some(&upload_task_id),
     );
     let a11y_fut = state.queue_backend.push_task(
-        &a11y_job, "accessibility_check", a11y_metadata, &state.db, Some(upstream_id), Some(upstream_id), None, Some(job.image_id), Some(&a11y_task_id),
+        &a11y_job, "accessibility_check", a11y_metadata, &state.db, Some(current_id), Some(upstream_id), None, Some(job.image_id), Some(&a11y_task_id),
     );
 
     let (color_res, upload_res, a11y_res) = tokio::join!(color_fut, upload_fut, a11y_fut);
 
-    if let Err(e) = color_res {
-        tracing::error!(image_id = job.image_id, "Failed to submit color_extract task: {}", e);
-    }
-    if let Err(e) = upload_res {
-        tracing::error!(image_id = job.image_id, "Failed to submit upload task: {}", e);
-    }
-    if let Err(e) = a11y_res {
-        tracing::error!(image_id = job.image_id, "Failed to submit accessibility_check task: {}", e);
-    }
+    color_res.map_err(|e| format!("Failed to submit color_extract task: {}", e))?;
+    upload_res.map_err(|e| format!("Failed to submit upload task: {}", e))?;
+    a11y_res.map_err(|e| format!("Failed to submit accessibility_check task: {}", e))?;
+    Ok(())
 }
 
 /// Download a single image from Pixiv to local disk.
 pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Result<(), String> {
-    let current_id = uuid::Uuid::new_v4().to_string();
+    let current_id = job.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let file_path = format!("{}/{}", state.config.image_dir, job.image_path);
 
     // 1. Check if file already exists on disk
@@ -656,7 +664,7 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
             }
         }
 
-        spawn_downstream_children(&job, &current_id, &**state).await;
+        spawn_downstream_children(&job, &current_id, &**state).await?;
         return Ok(());
     }
 
@@ -760,7 +768,7 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
     }
 
     // 5. Spawn downstream pipeline tasks
-    spawn_downstream_children(&job, &current_id, &**state).await;
+    spawn_downstream_children(&job, &current_id, &**state).await?;
 
     Ok(())
 }
@@ -891,7 +899,7 @@ pub async fn handle_accessibility_check(
 
 /// Discover related illustrations via Pixiv related-illust API.
 pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Result<(), String> {
-    let current_id = uuid::Uuid::new_v4().to_string();
+    let current_id = job.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let hop = job.hop;
     let max_hops = job.max_hops.unwrap_or(state.config.max_discover_hops);
@@ -960,8 +968,10 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
                     source_image_url: dl.source_image_url,
                     image_path: dl.image_path,
                     parent_job_id: Some(current_id.to_string()),
-                    root_job_id: Some(current_id.to_string()),
+                    root_job_id: job.root_job_id.clone(),
                     task_id: Some(download_task_id.clone()),
+                    max_retries: state.config.task_max_retries,
+                    backoff_base: state.config.task_backoff_base,
                 };
                 let metadata = serde_json::to_value(&download_job)
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
@@ -987,6 +997,9 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
             seed_method: job.seed_method.clone(),
             parent_job_id: Some(current_id.clone()),
             task_id: Some(next_discover_task_id.clone()),
+            root_job_id: job.root_job_id.clone(),
+            max_retries: state.config.task_max_retries,
+            backoff_base: state.config.task_backoff_base,
         };
         let metadata = serde_json::to_value(&next_discover_job)
             .map_err(|e| format!("Failed to serialize discover job: {}", e))?;
