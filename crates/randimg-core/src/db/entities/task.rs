@@ -26,7 +26,7 @@ pub struct Model {
     pub id: String,
 
     /// Fang 任务 ID，用于关联 fang_tasks 表
-    pub fang_task_id: Option<i64>,
+    pub fang_task_id: Option<String>,
 
     /// 任务类型：crawl, download, color_extract, upload, accessibility_check, discover, refresh_pixiv_token
     pub task_type: String,

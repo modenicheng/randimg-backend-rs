@@ -294,12 +294,13 @@ pub async fn count_subtasks(
 /// Delete all pending subtasks of `parent_id` (optionally filtered by task_type).
 ///
 /// Also deletes the corresponding task_dependency rows.
-/// Returns the list of deleted task IDs and the count of deleted dependency rows.
+/// Returns the list of deleted task IDs, their fang_task_ids (for queue cleanup),
+/// and the count of deleted dependency rows.
 pub async fn interrupt_subtasks(
     db: &DatabaseConnection,
     parent_id: &str,
     task_type: Option<&str>,
-) -> Result<(Vec<String>, u64), DbErr> {
+) -> Result<(Vec<String>, Vec<String>, u64), DbErr> {
     // Find pending child tasks
     let mut cond = Condition::all()
         .add(task::Column::ParentId.eq(parent_id))
@@ -314,9 +315,13 @@ pub async fn interrupt_subtasks(
 
     let to_delete = Task::find().filter(cond).all(db).await?;
     let deleted_ids: Vec<String> = to_delete.iter().map(|t| t.id.clone()).collect();
+    let fang_task_ids: Vec<String> = to_delete
+        .iter()
+        .filter_map(|t| t.fang_task_id.clone())
+        .collect();
 
     if deleted_ids.is_empty() {
-        return Ok((vec![], 0));
+        return Ok((vec![], vec![], 0));
     }
 
     // Delete dependency rows and task rows atomically
@@ -344,7 +349,7 @@ pub async fn interrupt_subtasks(
         TransactionError::Transaction(e) => e,
     })?;
 
-    Ok((deleted_ids, dep_count))
+    Ok((deleted_ids, fang_task_ids, dep_count))
 }
 
 /// Delete all task_dependency rows where the given task is a parent.

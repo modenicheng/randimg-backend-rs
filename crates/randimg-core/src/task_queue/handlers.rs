@@ -52,6 +52,28 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
                 .unwrap_or(0) as i32;
 
             let _ = query::crawler::mark_completed(&state.db, crawler_id, total).await;
+
+            // Trigger autonomous discover for next-hop crawling (unless disabled)
+            if job.disable_discover.unwrap_or(false) {
+                tracing::info!(crawler_id, "Discover disabled for this crawl job, skipping");
+            } else {
+            let discover_job = DiscoverJob {
+                hop: 0,
+                max_hops: job.discover_hops,
+                seed_limit: job.discover_seed_limit,
+                seed_method: job.discover_seed_method.clone(),
+                parent_job_id: Some(current_id.clone()),
+            };
+            let metadata = serde_json::to_value(&discover_job)
+                .map_err(|e| format!("Failed to serialize discover job: {}", e))?;
+            if let Err(e) = state
+                .queue_backend
+                .push_task(&discover_job, "discover", metadata, &state.db, Some(&current_id), Some(&current_id), None, None)
+                .await
+            {
+                tracing::error!("Failed to submit discover task after crawl: {}", e);
+            }
+            } // end discover check
         }
         Err(_) => {
             let _ = query::crawler::mark_failed(&state.db, crawler_id).await;

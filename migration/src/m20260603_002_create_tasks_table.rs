@@ -11,7 +11,7 @@ impl MigrationTrait for Migration {
         db.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY NOT NULL,
-                fang_task_id BIGINT,
+                fang_task_id TEXT,
                 task_type TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 parent_id TEXT,

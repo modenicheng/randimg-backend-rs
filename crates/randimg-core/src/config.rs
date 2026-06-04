@@ -134,7 +134,7 @@ impl AppConfig {
             max_discover_hops: env::var("MAX_DISCOVER_HOPS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
+                .unwrap_or(3),
             discover_seed_limit: env::var("DISCOVER_SEED_LIMIT")
                 .ok()
                 .and_then(|v| v.parse().ok())

@@ -11,6 +11,7 @@ mod m20260601_000002_fix_task_hierarchy_fk;
 mod m20260602_000001_add_downloaded;
 mod m20260603_000001_add_illust_metadata;
 mod m20260603_002_create_tasks_table;
+mod m20260604_001_alter_fang_task_id_to_text;
 
 pub struct Migrator;
 
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260602_000001_add_downloaded::Migration),
             Box::new(m20260603_000001_add_illust_metadata::Migration),
             Box::new(m20260603_002_create_tasks_table::Migration),
+            Box::new(m20260604_001_alter_fang_task_id_to_text::Migration),
         ]
     }
 }

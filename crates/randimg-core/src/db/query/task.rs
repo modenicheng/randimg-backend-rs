@@ -333,11 +333,11 @@ pub async fn create(
 pub async fn link_fang_task(
     db: &DatabaseConnection,
     task_id: &str,
-    fang_task_id: i64,
+    fang_task_id: &str,
 ) -> Result<(), DbErr> {
     if let Some(t) = Task::find_by_id(task_id.to_string()).one(db).await? {
         let mut active: task::ActiveModel = t.into();
-        active.fang_task_id = Set(Some(fang_task_id));
+        active.fang_task_id = Set(Some(fang_task_id.to_string()));
         active.status = Set(task::STATUS_QUEUED.to_string());
         active.updated_at = Set(Utc::now().into());
         active.update(db).await?;

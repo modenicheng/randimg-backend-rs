@@ -14,6 +14,7 @@ pub mod task_queue;
 
 use config::AppConfig;
 use std::sync::Arc;
+use std::time::Duration;
 use task_queue::fang_backend::QueueBackend;
 
 #[derive(Clone)]
@@ -39,12 +40,20 @@ pub async fn spawn_workers(
 ) -> Vec<tokio::task::JoinHandle<()>> {
     use fang::asynk::async_queue::AsyncQueue;
     use fang::asynk::async_worker_pool::AsyncWorkerPool;
+    use fang::SleepParams;
 
     // Initialize the global WorkerState so AsyncRunnable::run() can access it
     task_queue::jobs::init_worker_state(state.clone()).await;
 
     let queue: AsyncQueue = state.queue_backend.queue().clone();
     let mut handles = Vec::new();
+
+    let sleep_params = SleepParams {
+        sleep_period: Duration::from_millis(state.config.task_poll_interval_ms),
+        min_sleep_period: Duration::from_millis(state.config.task_poll_interval_ms),
+        max_sleep_period: Duration::from_millis(state.config.task_poll_interval_ms * 3),
+        sleep_step: Duration::from_millis(state.config.task_poll_interval_ms / 5),
+    };
 
     let pool_configs: &[(&str, u32)] = &[
         ("crawl", state.config.task_concurrency_crawl),
@@ -61,6 +70,7 @@ pub async fn spawn_workers(
             .number_of_workers(concurrency)
             .task_type(task_type)
             .queue(queue.clone())
+            .sleep_params(sleep_params.clone())
             .build();
 
         tracing::info!(

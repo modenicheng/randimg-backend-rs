@@ -51,6 +51,8 @@ pub struct CreateCrawlerRequest {
     pub discover_seed_limit: Option<u64>,
     /// Seed selection method for discover: "popularity", "views", "bookmarks", "random". Default: "popularity".
     pub discover_seed_method: Option<String>,
+    /// Disable discover entirely for this crawl job. Default: false.
+    pub disable_discover: Option<bool>,
 }
 
 /// POST /crawler  Create crawler task
@@ -102,6 +104,7 @@ pub async fn create_crawler(
         discover_hops: body.discover_hops,
         discover_seed_limit: body.discover_seed_limit,
         discover_seed_method: body.discover_seed_method,
+        disable_discover: body.disable_discover,
         parent_job_id: None,
     };
     state

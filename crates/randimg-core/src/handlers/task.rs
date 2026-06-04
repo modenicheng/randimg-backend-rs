@@ -14,6 +14,7 @@ use crate::db::entities::task;
 use crate::db::query;
 use crate::db::query::task_tree::ChildJobNode;
 use crate::error::AppError;
+use uuid::Uuid;
 
 /// Valid cleanup flag values.
 const CLEAN_COMPLETED: &str = "completed";
@@ -182,6 +183,14 @@ async fn clean_tasks(
         )
         .await?
     };
+
+    if let Some(ref short_type) = body.task_type {
+        if let Err(e) = state.queue_backend.remove_tasks_type(short_type).await {
+            tracing::warn!(task_type = %short_type, error = %e, "Failed to remove fang tasks by type");
+        }
+    } else if let Err(e) = state.queue_backend.remove_all_tasks().await {
+        tracing::warn!(error = %e, "Failed to remove all fang tasks");
+    }
 
     Ok(Json(serde_json::json!({
         "deleted": deleted,
@@ -374,6 +383,25 @@ pub async fn delete_task(
     _auth: AuthUser,
     Path(task_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let task = query::task::find_by_id(&state.db, &task_id)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let task = match task {
+        Some(t) => t,
+        None => return Err(AppError::NotFound(format!("Task {} not found", task_id))),
+    };
+
+    if let Some(ref fang_id) = task.fang_task_id {
+        if let Ok(uuid) = Uuid::parse_str(fang_id) {
+            if let Err(e) = state.queue_backend.remove_task(&uuid).await {
+                tracing::warn!(fang_task_id = %fang_id, error = %e, "Failed to remove fang task");
+            }
+        } else {
+            tracing::warn!(fang_task_id = %fang_id, "Invalid fang task UUID, skipping fang removal");
+        }
+    }
+
     let deleted = query::task::delete_by_id(&state.db, &task_id)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -415,6 +443,14 @@ pub async fn delete_pending_tasks(
     let deleted = query::task::delete_pending(&state.db, mapped_type)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    if let Some(ref short_type) = q.task_type {
+        if let Err(e) = state.queue_backend.remove_tasks_type(short_type).await {
+            tracing::warn!(task_type = %short_type, error = %e, "Failed to remove fang tasks by type");
+        }
+    } else if let Err(e) = state.queue_backend.remove_all_tasks().await {
+        tracing::warn!(error = %e, "Failed to remove all fang tasks");
+    }
 
     Ok(Json(serde_json::json!({
         "message": "Pending tasks deleted",
@@ -814,10 +850,20 @@ pub async fn interrupt_subtasks(
     Query(q): Query<InterruptSubtasksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mapped_type = q.task_type.as_deref().map(map_task_type);
-    let (cancelled_ids, _) =
+    let (cancelled_ids, fang_task_ids, _) =
         query::task_tree::interrupt_subtasks(&state.db, &task_id, mapped_type)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    for fang_id in &fang_task_ids {
+        if let Ok(uuid) = Uuid::parse_str(fang_id) {
+            if let Err(e) = state.queue_backend.remove_task(&uuid).await {
+                tracing::warn!(fang_task_id = %fang_id, error = %e, "Failed to remove fang task");
+            }
+        } else {
+            tracing::warn!(fang_task_id = %fang_id, "Invalid fang task UUID, skipping fang removal");
+        }
+    }
 
     Ok(Json(serde_json::json!({
         "parent_job_id": task_id,

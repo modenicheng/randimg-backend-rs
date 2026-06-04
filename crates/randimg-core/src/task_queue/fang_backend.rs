@@ -142,16 +142,79 @@ impl QueueBackend {
             .await
             .map_err(|e| format!("插入 fang 任务失败: {}", e))?;
 
-        let fang_task_id = uuid_to_i64(&fang_task.id);
+        let fang_task_id = fang_task.id.to_string();
         tracing::info!(task_id = %task_record.id, fang_task_id, "Pushed to fang queue");
 
         // 3. 关联 fang 任务 ID（同时更新状态为 queued）
-        query::task::link_fang_task(db, &task_record.id, fang_task_id)
+        query::task::link_fang_task(db, &task_record.id, &fang_task_id)
             .await
             .map_err(|e| format!("关联 fang 任务失败: {}", e))?;
 
         tracing::info!(task_id = %task_record.id, "Task queued successfully");
         Ok(task_record.id)
+    }
+
+    /// 从 fang 队列中删除指定任务
+    ///
+    /// 根据 UUID 删除 `fang_tasks` 表中的单条记录。
+    /// 注意：此方法仅操作 fang 队列表，不会删除自定义 `tasks` 表中的记录。
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - fang 任务的 UUID
+    ///
+    /// # Returns
+    ///
+    /// 删除的记录数（0 或 1）。
+    pub async fn remove_task(&self, id: &uuid::Uuid) -> Result<u64, String> {
+        let removed = self
+            .queue
+            .remove_task(id)
+            .await
+            .map_err(|e| format!("删除 fang 任务失败: {}", e))?;
+
+        tracing::debug!(task_id = %id, removed, "Removed fang task");
+        Ok(removed)
+    }
+
+    /// 从 fang 队列中删除指定类型的所有任务
+    ///
+    /// 根据 `task_type`（如 "crawl"、"download"）批量删除 `fang_tasks` 表中的记录。
+    ///
+    /// # Arguments
+    ///
+    /// * `task_type` - 任务类型标识
+    ///
+    /// # Returns
+    ///
+    /// 删除的记录数。
+    pub async fn remove_tasks_type(&self, task_type: &str) -> Result<u64, String> {
+        let removed = self
+            .queue
+            .remove_tasks_type(task_type)
+            .await
+            .map_err(|e| format!("删除 fang 任务类型失败: {}", e))?;
+
+        tracing::debug!(task_type, removed, "Removed fang tasks by type");
+        Ok(removed)
+    }
+
+    /// 从 fang 队列中删除所有任务
+    ///
+    /// 清空 `fang_tasks` 表。⚠️ 操作不可逆，请谨慎使用。
+    ///
+    /// # Returns
+    ///
+    /// 删除的记录数。
+    pub async fn remove_all_tasks(&self) -> Result<u64, String> {
+        let removed = self
+            .queue
+            .remove_all_tasks()
+            .await
+            .map_err(|e| format!("删除所有 fang 任务失败: {}", e))?;
+
+        tracing::debug!(removed, "Removed all fang tasks");
+        Ok(removed)
     }
 
     /// 获取内部 `AsyncQueue` 的不可变引用
@@ -162,16 +225,4 @@ impl QueueBackend {
     }
 }
 
-// ── 工具函数 ──────────────────────────────────────────────────
 
-/// 将 UUID 转换为 i64（取前 8 字节，大端序）
-///
-/// 用于将 fang 的 UUID 任务 ID 映射到自定义 tasks 表的 `fang_task_id: i64` 字段。
-/// 注意：此转换是有损的，不同 UUID 可能映射到相同的 i64，但在实际使用中碰撞概率极低。
-fn uuid_to_i64(uuid: &uuid::Uuid) -> i64 {
-    let bytes = uuid.as_bytes();
-    i64::from_be_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5], bytes[6], bytes[7],
-    ])
-}

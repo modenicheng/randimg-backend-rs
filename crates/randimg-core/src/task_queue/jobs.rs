@@ -68,6 +68,9 @@ pub struct CrawlJob {
     /// Seed selection method for discover: "popularity", "views", "bookmarks", "random".
     #[serde(default)]
     pub discover_seed_method: Option<String>,
+    /// Disable discover entirely for this crawl job. Default: false.
+    #[serde(default)]
+    pub disable_discover: Option<bool>,
     /// Parent task ID for hierarchy tracking.
     #[serde(default)]
     pub parent_job_id: Option<String>,
