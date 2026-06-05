@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "create-admin"
 path = "src/bin/create_admin.rs"
 
+[[bin]]
+name = "check-duplicate-palette-colors"
+path = "src/bin/check_duplicate_palette_colors.rs"
+
 [dependencies]
 randimg-core = { path = "../randimg-core", default-features = false, features = ["http"] }
 axum = { workspace = true }

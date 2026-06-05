@@ -117,35 +117,6 @@ fn main() {
     println!("\nVisualization saved to: {}", out_path);
 }
 
-fn rgb_to_lab_fn(r: u8, g: u8, b: u8) -> [f64; 3] {
-    let srgb_to_linear = |c: u8| -> f64 {
-        let c = c as f64 / 255.0;
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    let r_lin = srgb_to_linear(r);
-    let g_lin = srgb_to_linear(g);
-    let b_lin = srgb_to_linear(b);
-    let x = r_lin * 0.4124564 + g_lin * 0.3575761 + b_lin * 0.1804375;
-    let y = r_lin * 0.2126729 + g_lin * 0.7151522 + b_lin * 0.0721750;
-    let z = r_lin * 0.0193339 + g_lin * 0.1191920 + b_lin * 0.9503041;
-    let f = |t: f64| -> f64 {
-        const DELTA: f64 = 6.0 / 29.0;
-        if t > DELTA.powi(3) {
-            t.powf(1.0 / 3.0)
-        } else {
-            t / (3.0 * DELTA * DELTA) + 4.0 / 29.0
-        }
-    };
-    let fx = f(x / 0.95047);
-    let fy = f(y);
-    let fz = f(z / 1.08883);
-    [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
-}
-
 fn histogram_primary_color_fn(pixels: &[[u8; 3]], levels: u8) -> [u8; 3] {
     use std::collections::HashMap;
     let step = 256 / levels as u16;
