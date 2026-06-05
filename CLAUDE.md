@@ -75,7 +75,7 @@ The worker binary (`crates/randimg-worker/`) runs all 7 workers without Axum —
 | crawl, download, upload, accessibility-check, discover, refresh-pixiv-token | Exponential backoff, max retries | Network-bound (API calls, HTTP requests) |
 | color_extract | Minimal retries | Compute-bound (KMeans is deterministic) |
 
-**Job pipeline**: Crawl → Download → (ColorExtract + Upload + AccessibilityCheck in parallel) → Discover. Parent-child relationships are tracked in `task_dependencies` table. `DownloadJob` has a `root_job_id` so downstream tasks appear as direct children of the crawl task. The `db_backend.rs` provides methods that pre-generate ULIDs to record hierarchy before jobs execute.
+**Job pipeline**: Crawl → Download → (ColorExtract + Upload + AccessibilityCheck in parallel) → Discover. Parent-child relationships are tracked via `parent_id`/`root_id` columns on the `tasks` table. `DownloadJob` has a `root_job_id` so downstream tasks appear as direct children of the crawl task. The `db_backend.rs` provides methods that pre-generate ULIDs to record hierarchy before jobs execute.
 
 #### Color worker process isolation
 

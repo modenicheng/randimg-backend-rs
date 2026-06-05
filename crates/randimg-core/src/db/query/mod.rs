@@ -1,9 +1,9 @@
 pub mod admin;
 pub mod author;
 pub mod crawler;
+pub mod dead_letter;
 pub mod image;
 pub mod pixiv_credential;
 pub mod tag;
 pub mod task;
-pub mod task_dependency;
 pub mod task_tree;

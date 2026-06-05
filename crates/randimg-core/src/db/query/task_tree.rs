@@ -1,5 +1,4 @@
 use crate::db::entities::task::{self, Entity as Task};
-use crate::db::entities::task_dependency::{self, Entity as TaskDependency};
 use chrono::{DateTime, Utc};
 use sea_orm::*;
 use sea_orm::Condition;
@@ -293,15 +292,13 @@ pub async fn count_subtasks(
 
 /// Delete all pending subtasks of `parent_id` (optionally filtered by task_type).
 ///
-/// Also deletes the corresponding task_dependency rows.
 /// Returns the list of deleted task IDs, their fang_task_ids (for queue cleanup),
-/// and the count of deleted dependency rows.
+/// and the count of deleted tasks.
 pub async fn interrupt_subtasks(
     db: &DatabaseConnection,
     parent_id: &str,
     task_type: Option<&str>,
 ) -> Result<(Vec<String>, Vec<String>, u64), DbErr> {
-    // Find pending child tasks
     let mut cond = Condition::all()
         .add(task::Column::ParentId.eq(parent_id))
         .add(
@@ -324,56 +321,12 @@ pub async fn interrupt_subtasks(
         return Ok((vec![], vec![], 0));
     }
 
-    // Delete dependency rows and task rows atomically
-    let deleted_ids_clone = deleted_ids.clone();
-    let dep_count = db.transaction::<_, u64, DbErr>(|txn| {
-        Box::pin(async move {
-            // Delete task_dependency rows that reference the deleted children
-            let dep_deleted = TaskDependency::delete_many()
-                .filter(task_dependency::Column::ChildJobId.is_in(&deleted_ids_clone))
-                .exec(txn)
-                .await?;
-
-            // Delete the tasks themselves
-            Task::delete_many()
-                .filter(task::Column::Id.is_in(&deleted_ids_clone))
-                .exec(txn)
-                .await?;
-
-            Ok(dep_deleted.rows_affected)
-        })
-    })
-    .await
-    .map_err(|e| match e {
-        TransactionError::Connection(e) => e,
-        TransactionError::Transaction(e) => e,
-    })?;
-
-    Ok((deleted_ids, fang_task_ids, dep_count))
-}
-
-/// Delete all task_dependency rows where the given task is a parent.
-pub async fn clear_dependencies_for_parent(
-    db: &DatabaseConnection,
-    parent_id: &str,
-) -> Result<u64, DbErr> {
-    let result = TaskDependency::delete_many()
-        .filter(task_dependency::Column::ParentJobId.eq(parent_id))
+    let result = Task::delete_many()
+        .filter(task::Column::Id.is_in(&deleted_ids))
         .exec(db)
         .await?;
-    Ok(result.rows_affected)
-}
 
-/// Delete all task_dependency rows where the given task is a child.
-pub async fn clear_dependencies_for_child(
-    db: &DatabaseConnection,
-    child_id: &str,
-) -> Result<u64, DbErr> {
-    let result = TaskDependency::delete_many()
-        .filter(task_dependency::Column::ChildJobId.eq(child_id))
-        .exec(db)
-        .await?;
-    Ok(result.rows_affected)
+    Ok((deleted_ids, fang_task_ids, result.rows_affected))
 }
 
 // ---------------------------------------------------------------------------

@@ -3,8 +3,8 @@
 /// 提供 tasks 表的 CRUD 操作，替代 apalis_job 查询模块。
 /// 使用 SeaORM 查询构建器，PostgreSQL 查询。
 use crate::db::entities::task::{
-    self, Entity as Task, STATUS_DONE, STATUS_FAILED, STATUS_KILLED, STATUS_PENDING, STATUS_QUEUED,
-    STATUS_RUNNING,
+    self, Entity as Task, STATUS_DEAD, STATUS_DONE, STATUS_FAILED, STATUS_KILLED, STATUS_PENDING,
+    STATUS_QUEUED, STATUS_RUNNING,
 };
 use chrono::Utc;
 use sea_orm::*;
@@ -55,41 +55,14 @@ pub async fn find_by_id(
     Task::find_by_id(id.to_string()).one(db).await
 }
 
-/// 按 ID 删除任务（含 task_dependencies 清理）
+/// 按 ID 删除任务
 pub async fn delete_by_id(db: &DatabaseConnection, id: &str) -> Result<bool, DbErr> {
-    use crate::db::entities::task_dependency::{Column as DepCol, Entity as TaskDependency};
+    let result = Task::delete_many()
+        .filter(task::Column::Id.eq(id))
+        .exec(db)
+        .await?;
 
-    let id_owned = id.to_string();
-    let result = db.transaction::<_, bool, DbErr>(|txn| {
-        Box::pin(async move {
-            // 删除引用此任务作为子任务的依赖关系
-            TaskDependency::delete_many()
-                .filter(DepCol::ChildJobId.eq(&id_owned))
-                .exec(txn)
-                .await?;
-
-            // 删除引用此任务作为父任务的依赖关系
-            TaskDependency::delete_many()
-                .filter(DepCol::ParentJobId.eq(&id_owned))
-                .exec(txn)
-                .await?;
-
-            // 删除任务本身
-            let result = Task::delete_many()
-                .filter(task::Column::Id.eq(&id_owned))
-                .exec(txn)
-                .await?;
-
-            Ok(result.rows_affected > 0)
-        })
-    })
-    .await
-    .map_err(|e| match e {
-        TransactionError::Connection(e) => e,
-        TransactionError::Transaction(e) => e,
-    })?;
-
-    Ok(result)
+    Ok(result.rows_affected > 0)
 }
 
 /// 删除所有待处理任务（pending + queued）
@@ -105,125 +78,45 @@ pub async fn delete_pending(
     .await
 }
 
-/// 按状态批量删除任务
-///
-/// 同时清理 task_dependencies 中的关联行，返回删除的任务数量。
+/// 按状态批量删除任务，返回删除的任务数量。
 pub async fn delete_by_statuses(
     db: &DatabaseConnection,
     statuses: &[&str],
     task_type: Option<&str>,
 ) -> Result<u64, DbErr> {
-    use crate::db::entities::task_dependency::{Column as DepCol, Entity as TaskDependency};
-
     if statuses.is_empty() {
         return Ok(0);
     }
 
-    // 第一步：查找匹配的任务 ID
-    let mut q = Task::find()
-        .select_only()
-        .column(task::Column::Id)
+    let mut q = Task::delete_many()
         .filter(task::Column::Status.is_in(statuses.iter().copied()));
     if let Some(tt) = task_type {
         q = q.filter(task::Column::TaskType.eq(tt));
     }
-    let ids: Vec<String> = q.into_tuple().all(db).await?;
 
-    if ids.is_empty() {
-        return Ok(0);
-    }
-
-    // 第二步：原子删除依赖关系和任务
-    let ids_clone = ids.clone();
-    let result = db.transaction::<_, u64, DbErr>(|txn| {
-        Box::pin(async move {
-            // 删除这些任务作为子任务的依赖关系
-            TaskDependency::delete_many()
-                .filter(DepCol::ChildJobId.is_in(&ids_clone))
-                .exec(txn)
-                .await?;
-
-            // 删除这些任务作为父任务的依赖关系
-            TaskDependency::delete_many()
-                .filter(DepCol::ParentJobId.is_in(&ids_clone))
-                .exec(txn)
-                .await?;
-
-            // 删除任务本身
-            let result = Task::delete_many()
-                .filter(task::Column::Id.is_in(&ids_clone))
-                .exec(txn)
-                .await?;
-
-            Ok(result.rows_affected)
-        })
-    })
-    .await
-    .map_err(|e| match e {
-        TransactionError::Connection(e) => e,
-        TransactionError::Transaction(e) => e,
-    })?;
-
-    Ok(result)
+    let result = q.exec(db).await?;
+    Ok(result.rows_affected)
 }
 
 /// 按状态和 ID 列表批量删除任务
 ///
-/// 只删除同时匹配状态列表和 ID 列表的任务。
-/// 同时清理 task_dependencies 行。返回删除的任务数量。
+/// 只删除同时匹配状态列表和 ID 列表的任务。返回删除的任务数量。
 pub async fn delete_by_statuses_and_ids(
     db: &DatabaseConnection,
     statuses: &[&str],
     ids: &[String],
 ) -> Result<u64, DbErr> {
-    use crate::db::entities::task_dependency::{Column as DepCol, Entity as TaskDependency};
-
     if statuses.is_empty() || ids.is_empty() {
         return Ok(0);
     }
 
-    // 查找匹配的任务
-    let to_delete: Vec<String> = Task::find()
-        .select_only()
-        .column(task::Column::Id)
+    let result = Task::delete_many()
         .filter(task::Column::Status.is_in(statuses.iter().copied()))
         .filter(task::Column::Id.is_in(ids.iter().map(|s| s.as_str())))
-        .into_tuple()
-        .all(db)
+        .exec(db)
         .await?;
 
-    if to_delete.is_empty() {
-        return Ok(0);
-    }
-
-    let ids_clone = to_delete.clone();
-    let result = db.transaction::<_, u64, DbErr>(|txn| {
-        Box::pin(async move {
-            TaskDependency::delete_many()
-                .filter(DepCol::ChildJobId.is_in(&ids_clone))
-                .exec(txn)
-                .await?;
-
-            TaskDependency::delete_many()
-                .filter(DepCol::ParentJobId.is_in(&ids_clone))
-                .exec(txn)
-                .await?;
-
-            let result = Task::delete_many()
-                .filter(task::Column::Id.is_in(&ids_clone))
-                .exec(txn)
-                .await?;
-
-            Ok(result.rows_affected)
-        })
-    })
-    .await
-    .map_err(|e| match e {
-        TransactionError::Connection(e) => e,
-        TransactionError::Transaction(e) => e,
-    })?;
-
-    Ok(result)
+    Ok(result.rows_affected)
 }
 
 /// 按任务类型查找爬虫 ID 列表
@@ -261,7 +154,10 @@ pub async fn update_status(
         active.updated_at = Set(Utc::now().into());
 
         // 终态自动设置完成时间
-        if new_status == STATUS_DONE || new_status == STATUS_FAILED || new_status == STATUS_KILLED
+        if new_status == STATUS_DONE
+            || new_status == STATUS_FAILED
+            || new_status == STATUS_KILLED
+            || new_status == STATUS_DEAD
         {
             active.completed_at = Set(Some(Utc::now().into()));
         }
@@ -290,7 +186,8 @@ pub async fn update_error(
 pub async fn increment_retry(db: &DatabaseConnection, id: &str) -> Result<(), DbErr> {
     if let Some(t) = Task::find_by_id(id.to_string()).one(db).await? {
         let mut active: task::ActiveModel = t.into();
-        active.retry_count = Set(active.retry_count.unwrap() + 1);
+        let current = active.retry_count.try_as_ref().copied().unwrap_or(0);
+        active.retry_count = Set(current + 1);
         active.updated_at = Set(Utc::now().into());
         active.update(db).await?;
     }
@@ -299,7 +196,7 @@ pub async fn increment_retry(db: &DatabaseConnection, id: &str) -> Result<(), Db
 
 /// 创建新任务
 pub async fn create(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     task_type: &str,
     parent_id: Option<&str>,
     root_id: Option<&str>,
@@ -322,6 +219,8 @@ pub async fn create(
         params: Set(params.map(|s| s.to_string())),
         error_message: Set(None),
         retry_count: Set(0),
+        priority: Set(0),
+        progress: Set(0.0),
         created_at: Set(now.into()),
         updated_at: Set(now.into()),
         completed_at: Set(None),
@@ -331,7 +230,7 @@ pub async fn create(
 
 /// 创建任务记录（使用指定的 ID）
 pub async fn create_with_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: &str,
     task_type: &str,
     parent_id: Option<&str>,
@@ -354,6 +253,8 @@ pub async fn create_with_id(
         params: Set(params.map(|s| s.to_string())),
         error_message: Set(None),
         retry_count: Set(0),
+        priority: Set(0),
+        progress: Set(0.0),
         created_at: Set(now.into()),
         updated_at: Set(now.into()),
         completed_at: Set(None),
@@ -363,7 +264,7 @@ pub async fn create_with_id(
 
 /// 关联 Fang 任务 ID 并更新状态为 queued
 pub async fn link_fang_task(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     task_id: &str,
     fang_task_id: &str,
 ) -> Result<(), DbErr> {
@@ -479,47 +380,109 @@ pub async fn compute_derived_status(
 ///
 /// 根任务定义：`parent_id IS NULL`。
 /// 每个根任务附带从子任务计算出的派生状态和子任务总数。
+///
+/// 使用单条 SQL 查询（LEFT JOIN + GROUP BY）代替原来的 N+1 查询模式：
+/// - 原实现：1 次查询根任务 + 每个根任务 2 次查询（派生状态 + 子任务计数）= 2N+1 次
+/// - 新实现：1 次查询，通过 LEFT JOIN 聚合子任务状态计数，在 Rust 中计算派生状态
 pub async fn list_roots(
     db: &DatabaseConnection,
     task_type: Option<&str>,
     limit: u64,
     offset: u64,
 ) -> Result<Vec<RootTaskWithStatus>, DbErr> {
-    let mut query = Task::find()
-        .filter(task::Column::ParentId.is_null())
-        .order_by_desc(task::Column::CreatedAt);
+    let mut bind_values: Vec<Value> = Vec::new();
+    bind_values.push(Value::from(limit as i64));
+    bind_values.push(Value::from(offset as i64));
 
+    let mut type_filter = String::new();
     if let Some(tt) = task_type {
-        query = query.filter(task::Column::TaskType.eq(tt));
+        bind_values.push(Value::from(tt));
+        type_filter = " AND r.task_type = $3".to_string();
     }
 
-    let roots = query.limit(limit).offset(offset).all(db).await?;
+    let sql = format!(
+        r#"
+        SELECT
+            r.id, r.task_type, r.status, r.root_id, r.crawler_id, r.image_id,
+            r.params, r.error_message, r.retry_count,
+            r.created_at, r.updated_at, r.completed_at,
+            COUNT(c.id)                                                      AS children_count,
+            COUNT(CASE WHEN c.status IN ('pending','queued','running') THEN 1 END) AS active_count,
+            COUNT(CASE WHEN c.status = 'done'              THEN 1 END) AS done_count,
+            COUNT(CASE WHEN c.status IN ('failed','killed') THEN 1 END) AS failed_count,
+            COUNT(CASE WHEN c.status = 'killed'             THEN 1 END) AS killed_count
+        FROM (
+            SELECT * FROM tasks
+            WHERE parent_id IS NULL{type_filter}
+            ORDER BY created_at DESC
+            LIMIT $1 OFFSET $2
+        ) r
+        LEFT JOIN tasks c ON c.root_id = r.id AND c.id <> r.id
+        GROUP BY r.id, r.task_type, r.status, r.root_id, r.crawler_id, r.image_id,
+                 r.params, r.error_message, r.retry_count,
+                 r.created_at, r.updated_at, r.completed_at
+        ORDER BY r.created_at DESC
+        "#
+    );
 
-    let mut results = Vec::with_capacity(roots.len());
-    for root in roots {
-        let derived_status = compute_derived_status(db, &root.id).await?;
+    let stmt = Statement::from_sql_and_values(db.get_database_backend(), sql, bind_values);
+    let rows = db.query_all(stmt).await?;
 
-        let children_count = Task::find()
-            .filter(task::Column::RootId.eq(&root.id))
-            .filter(task::Column::Id.ne(&root.id))
-            .count(db)
-            .await?;
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id: String = row.try_get_by_index(0)?;
+        let task_type_val: String = row.try_get_by_index(1)?;
+        let status: String = row.try_get_by_index(2)?;
+        let root_id: Option<String> = row.try_get_by_index(3)?;
+        let crawler_id: Option<i32> = row.try_get_by_index(4)?;
+        let image_id: Option<i32> = row.try_get_by_index(5)?;
+        let params: Option<String> = row.try_get_by_index(6)?;
+        let error_message: Option<String> = row.try_get_by_index(7)?;
+        let retry_count: i32 = row.try_get_by_index(8)?;
+        let created_at: chrono::DateTime<chrono::Utc> = row.try_get_by_index(9)?;
+        let updated_at: chrono::DateTime<chrono::Utc> = row.try_get_by_index(10)?;
+        let completed_at: Option<chrono::DateTime<chrono::Utc>> = row.try_get_by_index(11)?;
+        let children_count: i64 = row.try_get_by_index(12)?;
+        let active_count: i64 = row.try_get_by_index(13)?;
+        let done_count: i64 = row.try_get_by_index(14)?;
+        let failed_count: i64 = row.try_get_by_index(15)?;
+
+        // Compute derived status from aggregated child counts.
+        // Mirrors the logic of `compute_derived_status()` but in-memory:
+        // - Any active (pending/queued/running) children → "running"
+        // - All children done, none failed → "completed"
+        // - Some done + some failed → "partial_success"
+        // - All failed → "failed"
+        // - No children → use root's own status
+        let derived_status = if children_count == 0 {
+            status.clone()
+        } else if active_count > 0 {
+            "running".to_string()
+        } else if failed_count > 0 && done_count > 0 {
+            "partial_success".to_string()
+        } else if failed_count == children_count {
+            "failed".to_string()
+        } else if done_count == children_count {
+            "completed".to_string()
+        } else {
+            "pending".to_string()
+        };
 
         results.push(RootTaskWithStatus {
-            id: root.id,
-            task_type: root.task_type,
-            status: root.status,
-            root_id: root.root_id,
-            crawler_id: root.crawler_id,
-            image_id: root.image_id,
-            params: root.params,
-            error_message: root.error_message,
-            retry_count: root.retry_count,
-            created_at: root.created_at.to_string(),
-            updated_at: root.updated_at.to_string(),
-            completed_at: root.completed_at.map(|dt| dt.to_string()),
+            id,
+            task_type: task_type_val,
+            status,
+            root_id,
+            crawler_id,
+            image_id,
+            params,
+            error_message,
+            retry_count,
+            created_at: created_at.to_string(),
+            updated_at: updated_at.to_string(),
+            completed_at: completed_at.map(|dt| dt.to_string()),
             derived_status,
-            children_count,
+            children_count: children_count as u64,
         });
     }
 
@@ -562,9 +525,130 @@ pub async fn create_with_parent(
         params: Set(params.map(|s| s.to_string())),
         error_message: Set(None),
         retry_count: Set(0),
+        priority: Set(0),
+        progress: Set(0.0),
         created_at: Set(now.into()),
         updated_at: Set(now.into()),
         completed_at: Set(None),
     };
     model.insert(db).await
+}
+
+/// Count tasks grouped by status category for health monitoring.
+///
+/// Returns `(running_count, queued_count, failed_count)` where:
+/// - running: tasks with status "running"
+/// - queued: tasks with status "pending" or "queued"
+/// - failed: tasks with status "failed" or "killed"
+pub async fn count_by_status(
+    db: &DatabaseConnection,
+) -> Result<(i64, i64, i64), DbErr> {
+    let sql = r#"
+        SELECT
+            COUNT(CASE WHEN status = 'running' THEN 1 END) AS running_count,
+            COUNT(CASE WHEN status IN ('pending', 'queued') THEN 1 END) AS queued_count,
+            COUNT(CASE WHEN status IN ('failed', 'killed') THEN 1 END) AS failed_count
+        FROM tasks
+    "#;
+    let stmt = Statement::from_sql_and_values(db.get_database_backend(), sql, []);
+    let row = db.query_one(stmt).await?.ok_or(DbErr::RecordNotFound(
+        "count_by_status returned no rows".to_string(),
+    ))?;
+    let running: i64 = row.try_get_by_index(0)?;
+    let queued: i64 = row.try_get_by_index(1)?;
+    let failed: i64 = row.try_get_by_index(2)?;
+    Ok((running, queued, failed))
+}
+
+/// Task metrics snapshot for the `/metrics` endpoint.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskMetrics {
+    pub total: i64,
+    pub by_status: std::collections::HashMap<String, i64>,
+    pub avg_duration_secs: Option<f64>,
+    pub tasks_per_minute: f64,
+}
+
+/// Compute task queue metrics.
+///
+/// Returns total count, counts per status, average duration of completed
+/// tasks (`completed_at - created_at`), and throughput (tasks completed in
+/// the last 60 minutes divided by 60).
+pub async fn get_task_metrics(db: &DatabaseConnection) -> Result<TaskMetrics, DbErr> {
+    let sql = r#"
+        SELECT
+            COUNT(*)                                                       AS total,
+            COUNT(CASE WHEN status = 'pending'   THEN 1 END)              AS cnt_pending,
+            COUNT(CASE WHEN status = 'queued'    THEN 1 END)              AS cnt_queued,
+            COUNT(CASE WHEN status = 'running'   THEN 1 END)              AS cnt_running,
+            COUNT(CASE WHEN status = 'done'      THEN 1 END)              AS cnt_done,
+            COUNT(CASE WHEN status = 'failed'    THEN 1 END)              AS cnt_failed,
+            COUNT(CASE WHEN status = 'killed'    THEN 1 END)              AS cnt_killed,
+            COUNT(CASE WHEN status = 'dead'      THEN 1 END)              AS cnt_dead,
+            AVG(CASE
+                WHEN completed_at IS NOT NULL
+                THEN EXTRACT(EPOCH FROM (completed_at - created_at))
+            END)                                                           AS avg_duration_secs,
+            COUNT(CASE
+                WHEN status = 'done'
+                 AND completed_at >= NOW() - INTERVAL '1 hour'
+                THEN 1
+            END)                                                           AS completed_last_hour
+        FROM tasks
+    "#;
+    let stmt = Statement::from_sql_and_values(db.get_database_backend(), sql, []);
+    let row = db
+        .query_one(stmt)
+        .await?
+        .ok_or(DbErr::RecordNotFound("get_task_metrics returned no rows".to_string()))?;
+
+    let total: i64 = row.try_get_by_index(0)?;
+    let cnt_pending: i64 = row.try_get_by_index(1)?;
+    let cnt_queued: i64 = row.try_get_by_index(2)?;
+    let cnt_running: i64 = row.try_get_by_index(3)?;
+    let cnt_done: i64 = row.try_get_by_index(4)?;
+    let cnt_failed: i64 = row.try_get_by_index(5)?;
+    let cnt_killed: i64 = row.try_get_by_index(6)?;
+    let cnt_dead: i64 = row.try_get_by_index(7)?;
+    let avg_duration_secs: Option<f64> = row.try_get_by_index(8)?;
+    let completed_last_hour: i64 = row.try_get_by_index(9)?;
+
+    let mut by_status = std::collections::HashMap::with_capacity(7);
+    by_status.insert("pending".to_string(), cnt_pending);
+    by_status.insert("queued".to_string(), cnt_queued);
+    by_status.insert("running".to_string(), cnt_running);
+    by_status.insert("done".to_string(), cnt_done);
+    by_status.insert("failed".to_string(), cnt_failed);
+    by_status.insert("killed".to_string(), cnt_killed);
+    by_status.insert("dead".to_string(), cnt_dead);
+
+    let tasks_per_minute = completed_last_hour as f64 / 60.0;
+
+    Ok(TaskMetrics {
+        total,
+        by_status,
+        avg_duration_secs,
+        tasks_per_minute,
+    })
+}
+
+pub async fn delete_by_statuses_and_older_than(
+    db: &DatabaseConnection,
+    statuses: &[&str],
+    older_than_hours: i64,
+) -> Result<u64, DbErr> {
+    if statuses.is_empty() || older_than_hours <= 0 {
+        return Ok(0);
+    }
+
+    let cutoff = Utc::now() - chrono::Duration::hours(older_than_hours);
+
+    let result = Task::delete_many()
+        .filter(task::Column::Status.is_in(statuses.iter().copied()))
+        .filter(task::Column::CompletedAt.is_not_null())
+        .filter(task::Column::CompletedAt.lt(cutoff))
+        .exec(db)
+        .await?;
+
+    Ok(result.rows_affected)
 }

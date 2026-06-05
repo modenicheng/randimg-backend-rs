@@ -366,8 +366,7 @@ pub async fn get_task(
 /// DELETE /tasks/{id} — Delete (cancel) a task by ID.
 ///
 /// Removes the task from the queue. If the task is currently running, the worker
-/// will fail on its next poll (the job row is gone). Dependency rows in
-/// `task_dependencies` are also cleaned up.
+/// will fail on its next poll (the job row is gone).
 ///
 /// # Response (200)
 ///
@@ -421,7 +420,6 @@ pub struct DeletePendingQuery {
 /// DELETE /tasks/pending — Delete all pending tasks, optionally filtered by type.
 ///
 /// Convenience shortcut equivalent to `POST /tasks/clean` with `flags: ["pending"]`.
-/// Also cleans up orphaned `task_dependencies` rows.
 ///
 /// # Query Parameters
 ///
@@ -475,9 +473,8 @@ pub struct RootsOrSubtasksQuery {
 
 /// GET /tasks/roots — Root tasks (jobs without a parent), with filters and pagination.
 ///
-/// Returns only top-level tasks — jobs that are NOT children in any
-/// `task_dependencies` relationship. Use this to see high-level crawl jobs
-/// without the noise of their subtasks.
+/// Returns only top-level tasks — jobs that have `parent_id IS NULL`.
+/// Use this to see high-level crawl jobs without the noise of their subtasks.
 ///
 /// The `status` filter applies to the **derived** status (aggregated from the
 /// entire descendant subtree), not the root's own status. This means a
@@ -826,7 +823,6 @@ pub struct InterruptSubtasksQuery {
 ///
 /// This is the "cancel all subtasks" action. Only deletes children with
 /// status `Pending` — running or completed subtasks are left untouched.
-/// Also cleans up their `task_dependencies` rows.
 ///
 /// # Query Parameters
 ///

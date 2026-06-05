@@ -237,7 +237,7 @@ Returns a single task object. Returns `404` if not found.
 DELETE /tasks/{id}
 ```
 
-Delete a single task by ID. Also cleans up `task_dependencies` rows. Returns `404` if not found.
+Delete a single task by ID. Returns `404` if not found.
 
 Response:
 
@@ -340,7 +340,7 @@ Clean only pending download tasks:
 GET /tasks/roots?status=running&limit=20
 ```
 
-Returns only top-level tasks — jobs that are NOT children in any `task_dependencies` relationship. Use this to see high-level crawl jobs without the noise of their subtasks.
+Returns only top-level tasks — jobs that have `parent_id IS NULL`. Use this to see high-level crawl jobs without the noise of their subtasks.
 
 Same query parameters as `GET /tasks`.
 
@@ -489,7 +489,7 @@ All errors return JSON:
 
 ## Task Hierarchy
 
-Tasks form a parent-child tree tracked in the `task_dependencies` table:
+Tasks form a parent-child tree tracked via `parent_id`/`root_id` columns on the `tasks` table:
 
 ```
 crawl (root)
