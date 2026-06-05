@@ -12,6 +12,176 @@ use crate::WorkerState;
 use crate::db::entities::task;
 use crate::db::query;
 use super::handlers;
+use serde_json::json;
+
+// ── AsyncRunnable macro ────────────────────────────────────────
+
+/// Check if a task has exceeded max retries and move it to the dead letter queue.
+///
+/// Called after a task is marked as `failed`. If `retry_count >= max_retries`,
+/// the task status is updated to `dead` and a dead letter entry is created.
+async fn maybe_move_to_dead_letter(
+    state: &Arc<WorkerState>,
+    task_id: &str,
+    max_retries: i32,
+    error_message: &str,
+    task_type: &str,
+) {
+    let task = match query::task::find_by_id(&state.db, task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            tracing::error!(task_id, "Task not found for DLQ check");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(task_id, error = %e, "Failed to fetch task for DLQ check");
+            return;
+        }
+    };
+
+    if task.retry_count < max_retries {
+        return;
+    }
+
+    tracing::warn!(
+        task_id,
+        task_type,
+        retry_count = task.retry_count,
+        max_retries,
+        "Task exceeded max retries, moving to dead letter queue"
+    );
+
+    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DEAD).await {
+        tracing::error!(task_id, error = %e, "Failed to update task status to dead");
+    }
+
+    let mut history: Vec<serde_json::Value> = Vec::new();
+    if let Some(ref prev_err) = task.error_message {
+        if !prev_err.is_empty() {
+            history.push(json!({
+                "attempt": task.retry_count,
+                "error": prev_err,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }));
+        }
+    }
+    history.push(json!({
+        "attempt": task.retry_count + 1,
+        "error": error_message,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    }));
+
+    if let Err(e) = query::dead_letter::insert_dead_letter(
+        &state.db,
+        task_id,
+        task_type,
+        task.params.as_deref(),
+        error_message,
+        task.retry_count,
+        Some(json!(history)),
+    )
+    .await
+    {
+        tracing::error!(task_id, error = %e, "Failed to insert dead letter entry");
+    }
+}
+
+/// Generate an `AsyncRunnable` implementation with common status-tracking
+/// boilerplate.  Usage:
+///
+/// ```ignore
+/// impl_async_runnable!(CrawlJob, handle_crawl, "crawl");
+/// ```
+macro_rules! impl_async_runnable {
+    ($job:ty, $handler:ident, $task_type:expr) => {
+        #[typetag::serde]
+        #[async_trait]
+        impl AsyncRunnable for $job {
+            async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
+                let state = worker_state();
+
+                // Update status to running
+                if let Some(ref task_id) = self.task_id {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                        tracing::error!(task_id, error = %e, "Failed to update task status to running");
+                    }
+                }
+
+                let timeout_secs = state.config.task_default_timeout_secs;
+                tracing::info!(task_type = $task_type, timeout_secs, "Job started");
+                let timed_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_secs),
+                    handlers::$handler(self.clone(), state),
+                ).await;
+
+                match timed_result {
+                    Ok(result) => {
+                        // Handler completed within timeout (may have succeeded or failed)
+                        if let Some(ref task_id) = self.task_id {
+                            match &result {
+                                Ok(()) => {
+                                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
+                                    }
+                                }
+                                Err(e) => {
+                                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
+                                    }
+                                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
+                                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
+                                    }
+                                    maybe_move_to_dead_letter(state, task_id, self.max_retries, &e.to_string(), $task_type).await;
+                                }
+                            }
+                        }
+
+                        match &result {
+                            Ok(()) => tracing::info!(task_type = $task_type, "Job completed"),
+                            Err(e) => tracing::error!(task_type = $task_type, error = %e, "Job failed"),
+                        }
+
+                        // Record timestamp for watchdog
+                        state.last_activity.insert($task_type.to_string(), std::time::Instant::now());
+
+                        result.map_err(|e| FangError { description: e })
+                    }
+                    Err(_elapsed) => {
+                        let timeout_msg = format!("Task timed out after {}s", timeout_secs);
+                        if let Some(ref task_id) = self.task_id {
+                            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                                tracing::error!(task_id, error = %e, "Failed to update task status to failed");
+                            }
+                            if let Err(e) = query::task::update_error(&state.db, task_id, &timeout_msg).await {
+                                tracing::error!(task_id, error = %e, "Failed to update task error message");
+                            }
+                            maybe_move_to_dead_letter(state, task_id, self.max_retries, &timeout_msg, $task_type).await;
+                        }
+                        tracing::error!(task_type = $task_type, timeout_secs, "Task timed out");
+
+                        // Record timestamp for watchdog even on timeout
+                        state.last_activity.insert($task_type.to_string(), std::time::Instant::now());
+
+                        // Return Ok to prevent Fang from retrying (already marked as failed)
+                        Ok(())
+                    }
+                }
+            }
+
+            fn task_type(&self) -> String {
+                $task_type.to_string()
+            }
+
+            fn max_retries(&self) -> i32 {
+                self.max_retries
+            }
+
+            fn backoff(&self, attempt: u32) -> u32 {
+                u32::pow(self.backoff_base, attempt)
+            }
+        }
+    };
+}
 
 fn default_max_retries() -> i32 { 3 }
 fn default_backoff_base() -> u32 { 2 }
@@ -224,389 +394,25 @@ pub struct RefreshPixivTokenJob {
     pub backoff_base: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupJob {
+    #[serde(default)]
+    pub parent_job_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: i32,
+    #[serde(default = "default_backoff_base")]
+    pub backoff_base: u32,
+}
+
 // ── AsyncRunnable implementations ──────────────────────────────
 
-#[typetag::serde]
-#[async_trait]
-impl AsyncRunnable for CrawlJob {
-    async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        let state = worker_state();
-
-        // Update status to running
-        if let Some(ref task_id) = self.task_id {
-            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
-                tracing::error!(task_id, error = %e, "Failed to update task status to running");
-            }
-        }
-
-        tracing::info!(crawler_id = self.crawler_id, crawl_type = self.crawl_type, "CrawlJob started");
-        let result = handlers::handle_crawl(self.clone(), state).await;
-
-        // Update status based on result
-        if let Some(ref task_id) = self.task_id {
-            match &result {
-                Ok(()) => {
-                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
-                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
-                    }
-                }
-                Err(e) => {
-                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
-                    }
-                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
-                    }
-                }
-            }
-        }
-
-        match &result {
-            Ok(()) => tracing::info!(crawler_id = self.crawler_id, "CrawlJob completed"),
-            Err(e) => tracing::error!(crawler_id = self.crawler_id, error = %e, "CrawlJob failed"),
-        }
-        result.map_err(|e| FangError { description: e })
-    }
-
-    fn task_type(&self) -> String {
-        "crawl".to_string()
-    }
-
-    fn max_retries(&self) -> i32 {
-        self.max_retries
-    }
-
-    fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(self.backoff_base, attempt)
-    }
-}
-
-#[typetag::serde]
-#[async_trait]
-impl AsyncRunnable for DownloadJob {
-    async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        let state = worker_state();
-
-        // Update status to running
-        if let Some(ref task_id) = self.task_id {
-            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
-                tracing::error!(task_id, error = %e, "Failed to update task status to running");
-            }
-        }
-
-        tracing::info!(image_id = self.image_id, path = %self.image_path, "DownloadJob started");
-        let result = handlers::handle_download(self.clone(), state).await;
-
-        // Update status based on result
-        if let Some(ref task_id) = self.task_id {
-            match &result {
-                Ok(()) => {
-                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
-                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
-                    }
-                }
-                Err(e) => {
-                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
-                    }
-                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
-                    }
-                }
-            }
-        }
-
-        match &result {
-            Ok(()) => tracing::info!(image_id = self.image_id, "DownloadJob completed"),
-            Err(e) => tracing::error!(image_id = self.image_id, error = %e, "DownloadJob failed"),
-        }
-        result.map_err(|e| FangError { description: e })
-    }
-
-    fn task_type(&self) -> String {
-        "download".to_string()
-    }
-
-    fn max_retries(&self) -> i32 {
-        self.max_retries
-    }
-
-    fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(self.backoff_base, attempt)
-    }
-}
-
-#[typetag::serde]
-#[async_trait]
-impl AsyncRunnable for ColorExtractJob {
-    async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        let state = worker_state();
-
-        // Update status to running
-        if let Some(ref task_id) = self.task_id {
-            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
-                tracing::error!(task_id, error = %e, "Failed to update task status to running");
-            }
-        }
-
-        tracing::info!(image_id = self.image_id, path = %self.image_path, "ColorExtractJob started");
-        let result = handlers::handle_color_extract(self.clone(), state).await;
-
-        // Update status based on result
-        if let Some(ref task_id) = self.task_id {
-            match &result {
-                Ok(()) => {
-                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
-                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
-                    }
-                }
-                Err(e) => {
-                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
-                    }
-                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
-                    }
-                }
-            }
-        }
-
-        match &result {
-            Ok(()) => tracing::info!(image_id = self.image_id, "ColorExtractJob completed"),
-            Err(e) => tracing::error!(image_id = self.image_id, error = %e, "ColorExtractJob failed"),
-        }
-        result.map_err(|e| FangError { description: e })
-    }
-
-    fn task_type(&self) -> String {
-        "color_extract".to_string()
-    }
-
-    fn max_retries(&self) -> i32 {
-        self.max_retries
-    }
-
-    fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(self.backoff_base, attempt)
-    }
-}
-
-#[typetag::serde]
-#[async_trait]
-impl AsyncRunnable for UploadJob {
-    async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        let state = worker_state();
-
-        // Update status to running
-        if let Some(ref task_id) = self.task_id {
-            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
-                tracing::error!(task_id, error = %e, "Failed to update task status to running");
-            }
-        }
-
-        tracing::info!(image_id = self.image_id, path = %self.image_path, "UploadJob started");
-        let result = handlers::handle_upload(self.clone(), state).await;
-
-        // Update status based on result
-        if let Some(ref task_id) = self.task_id {
-            match &result {
-                Ok(()) => {
-                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
-                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
-                    }
-                }
-                Err(e) => {
-                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
-                    }
-                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
-                    }
-                }
-            }
-        }
-
-        match &result {
-            Ok(()) => tracing::info!(image_id = self.image_id, "UploadJob completed"),
-            Err(e) => tracing::error!(image_id = self.image_id, error = %e, "UploadJob failed"),
-        }
-        result.map_err(|e| FangError { description: e })
-    }
-
-    fn task_type(&self) -> String {
-        "upload".to_string()
-    }
-
-    fn max_retries(&self) -> i32 {
-        self.max_retries
-    }
-
-    fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(self.backoff_base, attempt)
-    }
-}
-
-#[typetag::serde]
-#[async_trait]
-impl AsyncRunnable for AccessibilityCheckJob {
-    async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        let state = worker_state();
-
-        // Update status to running
-        if let Some(ref task_id) = self.task_id {
-            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
-                tracing::error!(task_id, error = %e, "Failed to update task status to running");
-            }
-        }
-
-        tracing::info!(image_id = self.image_id, path = %self.image_path, "AccessibilityCheckJob started");
-        let result = handlers::handle_accessibility_check(self.clone(), state).await;
-
-        // Update status based on result
-        if let Some(ref task_id) = self.task_id {
-            match &result {
-                Ok(()) => {
-                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
-                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
-                    }
-                }
-                Err(e) => {
-                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
-                    }
-                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
-                    }
-                }
-            }
-        }
-
-        match &result {
-            Ok(()) => tracing::info!(image_id = self.image_id, "AccessibilityCheckJob completed"),
-            Err(e) => tracing::error!(image_id = self.image_id, error = %e, "AccessibilityCheckJob failed"),
-        }
-        result.map_err(|e| FangError { description: e })
-    }
-
-    fn task_type(&self) -> String {
-        "accessibility_check".to_string()
-    }
-
-    fn max_retries(&self) -> i32 {
-        self.max_retries
-    }
-
-    fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(self.backoff_base, attempt)
-    }
-}
-
-#[typetag::serde]
-#[async_trait]
-impl AsyncRunnable for DiscoverJob {
-    async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        let state = worker_state();
-
-        // Update status to running
-        if let Some(ref task_id) = self.task_id {
-            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
-                tracing::error!(task_id, error = %e, "Failed to update task status to running");
-            }
-        }
-
-        tracing::info!(hop = self.hop, "DiscoverJob started");
-        let result = handlers::handle_discover(self.clone(), state).await;
-
-        // Update status based on result
-        if let Some(ref task_id) = self.task_id {
-            match &result {
-                Ok(()) => {
-                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
-                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
-                    }
-                }
-                Err(e) => {
-                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
-                    }
-                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
-                    }
-                }
-            }
-        }
-
-        match &result {
-            Ok(()) => tracing::info!(hop = self.hop, "DiscoverJob completed"),
-            Err(e) => tracing::error!(hop = self.hop, error = %e, "DiscoverJob failed"),
-        }
-        result.map_err(|e| FangError { description: e })
-    }
-
-    fn task_type(&self) -> String {
-        "discover".to_string()
-    }
-
-    fn max_retries(&self) -> i32 {
-        self.max_retries
-    }
-
-    fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(self.backoff_base, attempt)
-    }
-}
-
-#[typetag::serde]
-#[async_trait]
-impl AsyncRunnable for RefreshPixivTokenJob {
-    async fn run(&self, _queue: &dyn AsyncQueueable) -> Result<(), FangError> {
-        let state = worker_state();
-
-        // Update status to running
-        if let Some(ref task_id) = self.task_id {
-            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
-                tracing::error!(task_id, error = %e, "Failed to update task status to running");
-            }
-        }
-
-        tracing::info!(credential_id = self.credential_id, "RefreshPixivTokenJob started");
-        let result = handlers::handle_refresh_pixiv_token(self.clone(), state).await;
-
-        // Update status based on result
-        if let Some(ref task_id) = self.task_id {
-            match &result {
-                Ok(()) => {
-                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
-                        tracing::error!(task_id, error = %e, "Failed to update task status to done");
-                    }
-                }
-                Err(e) => {
-                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
-                    }
-                    if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
-                        tracing::error!(task_id, error = %update_err, "Failed to update task error message");
-                    }
-                }
-            }
-        }
-
-        match &result {
-            Ok(()) => tracing::info!(credential_id = self.credential_id, "RefreshPixivTokenJob completed"),
-            Err(e) => tracing::error!(credential_id = self.credential_id, error = %e, "RefreshPixivTokenJob failed"),
-        }
-        result.map_err(|e| FangError { description: e })
-    }
-
-    fn task_type(&self) -> String {
-        "refresh_pixiv_token".to_string()
-    }
-
-    fn max_retries(&self) -> i32 {
-        self.max_retries
-    }
-
-    fn backoff(&self, attempt: u32) -> u32 {
-        u32::pow(self.backoff_base, attempt)
-    }
-}
+impl_async_runnable!(CrawlJob, handle_crawl, "crawl");
+impl_async_runnable!(DownloadJob, handle_download, "download");
+impl_async_runnable!(ColorExtractJob, handle_color_extract, "color_extract");
+impl_async_runnable!(UploadJob, handle_upload, "upload");
+impl_async_runnable!(AccessibilityCheckJob, handle_accessibility_check, "accessibility_check");
+impl_async_runnable!(DiscoverJob, handle_discover, "discover");
+impl_async_runnable!(RefreshPixivTokenJob, handle_refresh_pixiv_token, "refresh_pixiv_token");
+impl_async_runnable!(CleanupJob, handle_cleanup, "cleanup");

@@ -23,10 +23,13 @@ compile_error!("Fang async backend requires the 'queue-postgres' feature.");
 
 use crate::config::AppConfig;
 use crate::db::query;
+use crate::task_queue::fingerprint::FingerprintCache;
 use fang::asynk::async_queue::{AsyncQueue, AsyncQueueable};
 use fang::asynk::async_runnable::AsyncRunnable;
 use sea_orm::DatabaseConnection;
+use sea_orm::TransactionTrait;
 use serde_json::Value as JsonValue;
+use std::sync::Arc;
 
 // ── QueueBackend ─────────────────────────────────────────────
 
@@ -37,9 +40,24 @@ use serde_json::Value as JsonValue;
 #[derive(Clone, Debug)]
 pub struct QueueBackend {
     queue: AsyncQueue,
+    pub fingerprint_cache: Arc<FingerprintCache>,
 }
 
 impl QueueBackend {
+    /// Create a no-op instance for testing. The internal queue is unconnected —
+    /// any operation that pushes/fetches tasks will fail, but the struct can be
+    /// held in `WorkerState` for handler-level tests that return early.
+    pub fn new_noop() -> Self {
+        let queue = AsyncQueue::builder()
+            .uri("postgres://localhost/noop")
+            .max_pool_size(1u32)
+            .build();
+        Self {
+            queue,
+            fingerprint_cache: Arc::new(FingerprintCache::new(300)),
+        }
+    }
+
     /// 从配置创建队列后端并建立连接
     ///
     /// 使用 `config.queue_database_url` 作为 PostgreSQL 连接串。
@@ -62,7 +80,10 @@ impl QueueBackend {
         // 初始化 fang 队列表（fang_tasks + fang_task_state enum）
         Self::setup_schema(&config.queue_database_url).await?;
 
-        Ok(Self { queue })
+        Ok(Self {
+            queue,
+            fingerprint_cache: Arc::new(FingerprintCache::new(config.task_dedup_ttl_secs)),
+        })
     }
 
     /// 使用 fang 官方 migration API 初始化队列 schema
@@ -82,12 +103,15 @@ impl QueueBackend {
         Ok(())
     }
 
-    /// 推送任务到 fang 队列并同步到自定义任务表
+    /// 推送任务到 fang 队列并同步到自定义任务表（事务包装，保证原子性）
     ///
-    /// 流程：
-    /// 1. 在 `tasks` 表创建自定义任务记录（状态：pending）
-    /// 2. 在 `fang_tasks` 表插入队列任务（状态：new）
-    /// 3. 通过 `fang_task_id` 关联两张表，更新 tasks 状态为 queued
+    /// 流程（在 API 数据库事务中执行，失败时自动回滚，无孤儿任务）：
+    /// 1. 开启 API 数据库事务
+    /// 2. 在 `tasks` 表创建自定义任务记录（状态：pending）
+    /// 3. 在 `fang_tasks` 表插入队列任务（状态：new）— 独立队列数据库
+    /// 4. 步骤 3 失败 → 事务回滚，步骤 2 的记录不持久化
+    /// 5. 在事务中通过 `fang_task_id` 关联两张表，更新 tasks 状态为 queued
+    /// 6. 提交事务
     ///
     /// # Arguments
     ///
@@ -121,10 +145,22 @@ impl QueueBackend {
         image_id: Option<i32>,
         task_id: Option<&str>,
     ) -> Result<String, String> {
-        // 1. 创建自定义任务记录 — 使用提供的 task_id 或生成新的
+        let params_str = metadata.to_string();
+        if !self.fingerprint_cache.check_and_insert(task_type, &params_str) {
+            tracing::debug!(task_type, "Skipping duplicate task within dedup TTL");
+            return Err("duplicate task fingerprint within TTL".into());
+        }
+
+        // 开启事务 — API 数据库上的 SeaORM 事务
+        let txn = db
+            .begin()
+            .await
+            .map_err(|e| format!("开启事务失败: {}", e))?;
+
+        // 1. 在事务中创建自定义任务记录
         let task_record = if let Some(tid) = task_id {
             query::task::create_with_id(
-                db,
+                &txn,
                 tid,
                 task_type,
                 parent_id,
@@ -137,7 +173,7 @@ impl QueueBackend {
             .map_err(|e| format!("创建任务记录失败: {}", e))?
         } else {
             query::task::create(
-                db,
+                &txn,
                 task_type,
                 parent_id,
                 root_id,
@@ -149,9 +185,10 @@ impl QueueBackend {
             .map_err(|e| format!("创建任务记录失败: {}", e))?
         };
 
-        tracing::info!(task_id = %task_record.id, task_type, "Task record created");
+        tracing::info!(task_id = %task_record.id, task_type, "Task record created in transaction");
 
-        // 2. 插入到 fang 队列 — 使用实际的 AsyncRunnable 实现
+        // 2. 插入到 fang 队列 — 独立队列数据库，不在同一个事务中
+        //    如果此步骤失败，`txn` 会被 drop → 自动回滚步骤 1 的任务记录
         let fang_task = self
             .queue
             .insert_task(task)
@@ -161,12 +198,17 @@ impl QueueBackend {
         let fang_task_id = fang_task.id.to_string();
         tracing::info!(task_id = %task_record.id, fang_task_id, "Pushed to fang queue");
 
-        // 3. 关联 fang 任务 ID（同时更新状态为 queued）
-        query::task::link_fang_task(db, &task_record.id, &fang_task_id)
+        // 3. 在事务中关联 fang 任务 ID（同时更新状态为 queued）
+        query::task::link_fang_task(&txn, &task_record.id, &fang_task_id)
             .await
             .map_err(|e| format!("关联 fang 任务失败: {}", e))?;
 
-        tracing::info!(task_id = %task_record.id, "Task queued successfully");
+        // 4. 提交事务 — 任务创建 + fang 关联一起持久化
+        txn.commit()
+            .await
+            .map_err(|e| format!("提交事务失败: {}", e))?;
+
+        tracing::info!(task_id = %task_record.id, "Task queued successfully (transaction committed)");
         Ok(task_record.id)
     }
 
