@@ -8,7 +8,9 @@ use crate::db::query::image::SeedMethod;
 use crate::pixiv::PixivApi;
 use std::time::Duration;
 
+use super::CrawlType;
 use super::jobs::*;
+use super::retry::retry_with_auth_recovery;
 
 // ---------------------------------------------------------------------------
 // Job handlers
@@ -41,11 +43,10 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
         return Err("No active Pixiv credentials found".into());
     };
 
-    let result = match crawl_type {
-        0 => crawl_ranking(&**state, &api, credential_id, &job, &current_id).await,
-        1 => crawl_user(&**state, &api, credential_id, &job, &current_id).await,
-        2 => crawl_bookmarks(&**state, &api, credential_id, &job, &current_id).await,
-        _ => Err(format!("Unknown crawl_type: {}", crawl_type)),
+    let result = match CrawlType::try_from(crawl_type)? {
+        CrawlType::Ranking => crawl_ranking(&**state, &api, credential_id, &job, &current_id).await,
+        CrawlType::User => crawl_user(&**state, &api, credential_id, &job, &current_id).await,
+        CrawlType::Bookmarks => crawl_bookmarks(&**state, &api, credential_id, &job, &current_id).await,
     };
 
     // Update crawler status based on result
@@ -108,19 +109,13 @@ async fn crawl_ranking(
     let mut offset = 0u32;
     let mut pages_processed = 0u32;
     loop {
-        let resp = match api
-            .illust_ranking(Some(mode), date, Some(offset))
-            .await
-        {
-            Ok(r) => r,
-            Err(e) if e.is_auth_error() => {
-                crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string())?;
-                api.illust_ranking(Some(mode), date, Some(offset))
-                    .await
-                    .map_err(|e| format!("Ranking API error after auth recovery: {}", e))?
-            }
-            Err(e) => return Err(format!("Ranking API error: {}", e)),
-        };
+        let resp = retry_with_auth_recovery(
+            "illust_ranking",
+            state.config.auth_max_retries,
+            state.config.auth_backoff_base_ms,
+            || async { api.illust_ranking(Some(mode), date, Some(offset)).await.map_err(|e| e.to_string()) },
+            || async { crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
+        ).await?;
 
         let data = resp.data.ok_or("No data in ranking response")?;
         let illusts = data.illusts;
@@ -188,19 +183,13 @@ async fn crawl_user(
     let mut offset = 0u32;
     let mut pages_processed = 0u32;
     loop {
-        let resp = match api
-            .user_illusts(user_id, Some(illust_type), Some(offset))
-            .await
-        {
-            Ok(r) => r,
-            Err(e) if e.is_auth_error() => {
-                crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string())?;
-                api.user_illusts(user_id, Some(illust_type), Some(offset))
-                    .await
-                    .map_err(|e| format!("User illusts API error after auth recovery: {}", e))?
-            }
-            Err(e) => return Err(format!("User illusts API error: {}", e)),
-        };
+        let resp = retry_with_auth_recovery(
+            "user_illusts",
+            state.config.auth_max_retries,
+            state.config.auth_backoff_base_ms,
+            || async { api.user_illusts(user_id, Some(illust_type), Some(offset)).await.map_err(|e| e.to_string()) },
+            || async { crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
+        ).await?;
 
         let data = resp.data.ok_or("No data in user_illusts response")?;
         let illusts = data.illusts;
@@ -274,19 +263,13 @@ async fn crawl_bookmarks(
     let mut max_bookmark_id: Option<u64> = None;
     let mut pages_processed = 0u32;
     loop {
-        let resp = match api
-            .user_bookmarks_illust(user_id, Some("public"), max_bookmark_id, tags)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) if e.is_auth_error() => {
-                crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string())?;
-                api.user_bookmarks_illust(user_id, Some("public"), max_bookmark_id, tags)
-                    .await
-                    .map_err(|e| format!("Bookmarks API error after auth recovery: {}", e))?
-            }
-            Err(e) => return Err(format!("Bookmarks API error: {}", e)),
-        };
+        let resp = retry_with_auth_recovery(
+            "user_bookmarks_illust",
+            state.config.auth_max_retries,
+            state.config.auth_backoff_base_ms,
+            || async { api.user_bookmarks_illust(user_id, Some("public"), max_bookmark_id, tags).await.map_err(|e| e.to_string()) },
+            || async { crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
+        ).await?;
 
         let data = resp.data.ok_or("No data in bookmarks response")?;
         let illusts = data.illusts;
@@ -817,6 +800,19 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
 /// rayon pool inside `extract_theme_colors`, this ensures color
 /// extraction never blocks the async runtime.
 pub async fn handle_color_extract(job: ColorExtractJob, state: &Arc<WorkerState>) -> Result<(), String> {
+    // Idempotency: skip if colors already extracted
+    use crate::db::entities::image::Entity as Image;
+    if let Some(img) = Image::find_by_id(job.image_id)
+        .one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        if img.colors.is_some() {
+            tracing::debug!(image_id = job.image_id, "Image already has colors, skipping");
+            return Ok(());
+        }
+    }
+
     let image_dir = state.config.image_dir.clone();
     let image_id = job.image_id;
     let color_k = state.config.color_extract_k;
@@ -836,7 +832,7 @@ pub async fn handle_color_extract(job: ColorExtractJob, state: &Arc<WorkerState>
     .map_err(|e| format!("spawn_blocking panicked: {}", e))??;
 
     // DB writes stay on the async runtime (they are I/O-bound)
-    use crate::db::entities::image::{self, Entity as Image};
+    use crate::db::entities::image;
     if let Some(img_model) = Image::find_by_id(image_id)
         .one(&state.db)
         .await
@@ -887,6 +883,19 @@ pub async fn handle_color_extract(job: ColorExtractJob, state: &Arc<WorkerState>
 
 /// Upload a downloaded image to DogeCloud OSS.
 pub async fn handle_upload(job: UploadJob, state: &Arc<WorkerState>) -> Result<(), String> {
+    // Idempotency: skip if already uploaded (is_public set by previous upload)
+    use crate::db::entities::image::Entity as Image;
+    if let Some(img) = Image::find_by_id(job.image_id)
+        .one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        if img.is_public {
+            tracing::debug!(image_id = job.image_id, "Image already uploaded, skipping");
+            return Ok(());
+        }
+    }
+
     let file_path = format!("{}/{}", state.config.image_dir, job.image_path);
     let bytes = tokio::fs::read(&file_path)
         .await
@@ -905,7 +914,7 @@ pub async fn handle_upload(job: UploadJob, state: &Arc<WorkerState>) -> Result<(
     );
 
     // Mark image as public
-    use crate::db::entities::image::{self, Entity as Image};
+    use crate::db::entities::image;
     if let Some(img_model) = Image::find_by_id(job.image_id)
         .one(&state.db)
         .await
@@ -930,6 +939,10 @@ pub async fn handle_accessibility_check(
         .await
         .map_err(|e| e.to_string())?
     {
+        if img_model.accessible.is_some() {
+            tracing::debug!(image_id = job.image_id, "Image already checked, skipping");
+            return Ok(());
+        }
         let mut active: image::ActiveModel = img_model.into();
         active.accessible = Set(Some(true));
         active.update(&state.db).await.map_err(|e| e.to_string())?;
@@ -1010,20 +1023,27 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
             .source_id
             .ok_or_else(|| format!("Seed {} missing source_id", seed.id))?;
 
-        let resp = match api.illust_related(source_id as u64).await {
-            Ok(r) => r,
-            Err(e) if e.is_auth_error() => {
-                crate::pixiv::recover_auth(&api, credential_id, &state.db).await.map_err(|e| e.to_string())?;
-                api.illust_related(source_id as u64)
-                    .await
-                    .map_err(|e| format!("illust_related API error after auth recovery: {}", e))?
-            }
-            Err(e) => return Err(format!("illust_related API error: {}", e).into()),
-        };
+        let resp = retry_with_auth_recovery(
+            "illust_related",
+            state.config.auth_max_retries,
+            state.config.auth_backoff_base_ms,
+            || async { api.illust_related(source_id as u64).await.map_err(|e| e.to_string()) },
+            || async { crate::pixiv::recover_auth(&api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
+        ).await?;
 
         let data = resp.data.ok_or("No data in illust_related response")?;
 
         for illust in &data.illusts {
+            let illust_id = illust.id;
+            // Dedup: skip if recently processed
+            if let Some(entry) = state.discover_cache.get(&illust_id.to_string()) {
+                if entry.elapsed() < Duration::from_secs(3600) {
+                    tracing::debug!(illust_id, "Skipping duplicate discover");
+                    continue;
+                }
+            }
+            state.discover_cache.insert(illust_id.to_string(), std::time::Instant::now());
+
             let downloads = save_illust(state, illust, None, None, None).await?;
             for dl in downloads {
                 let download_task_id = uuid::Uuid::new_v4().to_string();
@@ -1141,6 +1161,33 @@ pub async fn handle_refresh_pixiv_token(
         credential_id,
         pixiv_user_id = %cred.pixiv_user_id,
         "Pixiv token refresh completed"
+    );
+
+    Ok(())
+}
+
+pub async fn handle_cleanup(_job: CleanupJob, state: &Arc<WorkerState>) -> Result<(), String> {
+    let task_ttl = state.config.task_cleanup_ttl_hours as i64;
+    let dl_ttl = state.config.dead_letter_ttl_hours as i64;
+
+    let deleted_tasks = query::task::delete_by_statuses_and_older_than(
+        &state.db,
+        &[crate::db::entities::task::STATUS_DONE, crate::db::entities::task::STATUS_FAILED],
+        task_ttl,
+    )
+    .await
+    .map_err(|e| format!("Failed to cleanup old tasks: {}", e))?;
+
+    let deleted_dl = query::dead_letter::delete_older_than(&state.db, dl_ttl)
+        .await
+        .map_err(|e| format!("Failed to cleanup old dead letters: {}", e))?;
+
+    tracing::info!(
+        deleted_tasks,
+        deleted_dl,
+        task_ttl_hours = task_ttl,
+        dead_letter_ttl_hours = dl_ttl,
+        "Cleanup completed"
     );
 
     Ok(())
