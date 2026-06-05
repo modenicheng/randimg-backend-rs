@@ -127,6 +127,8 @@ pub async fn find_by_id(
         "total_view": img.total_view,
         "total_bookmarks": img.total_bookmarks,
         "total_comments": img.total_comments,
+        "accessible": img.accessible,
+        "is_public": img.is_public,
         "author": {
             "id": author.id,
             "name": author.name,
