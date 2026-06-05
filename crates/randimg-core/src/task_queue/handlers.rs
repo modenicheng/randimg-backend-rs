@@ -6,6 +6,7 @@ use crate::WorkerState;
 use crate::db::query;
 use crate::db::query::image::SeedMethod;
 use crate::pixiv::PixivApi;
+use std::time::Duration;
 
 use super::jobs::*;
 
@@ -25,12 +26,17 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
         .map_err(|e| format!("Failed to mark crawler running: {}", e))?;
 
     // Authenticate Pixiv API: reuse stored token if valid, otherwise refresh
-    let api = crate::pixiv::create_api(&state.config.pixiv_proxy, &state.config.pixiv_accept_lang).await;
+    let api = crate::pixiv::create_api(
+        &state.config.pixiv_proxy,
+        &state.config.pixiv_accept_lang,
+        Some(Duration::from_secs(state.config.pixiv_timeout_secs)),
+    )
+    .await;
     let credential_id = if let Some(cred) = query::pixiv_credential::find_one_active_random(&state.db)
         .await
         .map_err(|e| format!("Failed to fetch credential: {}", e))?
     {
-        crate::pixiv::auth_with_credential(&api, &cred, &state.db).await?
+        crate::pixiv::auth_with_credential(&api, &cred, &state.db).await.map_err(|e| e.to_string())?
     } else {
         return Err("No active Pixiv credentials found".into());
     };
@@ -108,7 +114,7 @@ async fn crawl_ranking(
         {
             Ok(r) => r,
             Err(e) if e.is_auth_error() => {
-                crate::pixiv::recover_auth(api, credential_id, &state.db).await?;
+                crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string())?;
                 api.illust_ranking(Some(mode), date, Some(offset))
                     .await
                     .map_err(|e| format!("Ranking API error after auth recovery: {}", e))?
@@ -188,7 +194,7 @@ async fn crawl_user(
         {
             Ok(r) => r,
             Err(e) if e.is_auth_error() => {
-                crate::pixiv::recover_auth(api, credential_id, &state.db).await?;
+                crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string())?;
                 api.user_illusts(user_id, Some(illust_type), Some(offset))
                     .await
                     .map_err(|e| format!("User illusts API error after auth recovery: {}", e))?
@@ -274,7 +280,7 @@ async fn crawl_bookmarks(
         {
             Ok(r) => r,
             Err(e) if e.is_auth_error() => {
-                crate::pixiv::recover_auth(api, credential_id, &state.db).await?;
+                crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string())?;
                 api.user_bookmarks_illust(user_id, Some("public"), max_bookmark_id, tags)
                     .await
                     .map_err(|e| format!("Bookmarks API error after auth recovery: {}", e))?
@@ -965,7 +971,12 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
     tracing::info!(count = seeds.len(), "Selected discover seeds");
 
     // Authenticate Pixiv API: reuse stored token if valid, otherwise refresh
-    let api = crate::pixiv::create_api(&state.config.pixiv_proxy, &state.config.pixiv_accept_lang).await;
+    let api = crate::pixiv::create_api(
+        &state.config.pixiv_proxy,
+        &state.config.pixiv_accept_lang,
+        Some(Duration::from_secs(state.config.pixiv_timeout_secs)),
+    )
+    .await;
     let credential_id = if let Some(ref ids) = job.credential_ids {
         if !ids.is_empty() {
             let creds = query::pixiv_credential::find_active_by_ids(&state.db, ids)
@@ -977,20 +988,20 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
                 ));
             }
             let cred = creds.into_iter().next().unwrap();
-            crate::pixiv::auth_with_credential(&api, &cred, &state.db).await?
+            crate::pixiv::auth_with_credential(&api, &cred, &state.db).await.map_err(|e| e.to_string())?
         } else {
             let cred = query::pixiv_credential::find_one_active_random(&state.db)
                 .await
                 .map_err(|e| format!("Failed to fetch credential: {}", e))?
                 .ok_or("No active Pixiv credentials found")?;
-            crate::pixiv::auth_with_credential(&api, &cred, &state.db).await?
+            crate::pixiv::auth_with_credential(&api, &cred, &state.db).await.map_err(|e| e.to_string())?
         }
     } else {
         let cred = query::pixiv_credential::find_one_active_random(&state.db)
             .await
             .map_err(|e| format!("Failed to fetch credential: {}", e))?
             .ok_or("No active Pixiv credentials found")?;
-        crate::pixiv::auth_with_credential(&api, &cred, &state.db).await?
+        crate::pixiv::auth_with_credential(&api, &cred, &state.db).await.map_err(|e| e.to_string())?
     };
 
     let mut total_discovered = 0u32;
@@ -1002,7 +1013,7 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
         let resp = match api.illust_related(source_id as u64).await {
             Ok(r) => r,
             Err(e) if e.is_auth_error() => {
-                crate::pixiv::recover_auth(&api, credential_id, &state.db).await?;
+                crate::pixiv::recover_auth(&api, credential_id, &state.db).await.map_err(|e| e.to_string())?;
                 api.illust_related(source_id as u64)
                     .await
                     .map_err(|e| format!("illust_related API error after auth recovery: {}", e))?
@@ -1089,7 +1100,12 @@ pub async fn handle_refresh_pixiv_token(
         "Starting Pixiv token refresh"
     );
 
-    let api = crate::pixiv::create_api(&state.config.pixiv_proxy, &state.config.pixiv_accept_lang).await;
+    let api = crate::pixiv::create_api(
+        &state.config.pixiv_proxy,
+        &state.config.pixiv_accept_lang,
+        Some(Duration::from_secs(state.config.pixiv_timeout_secs)),
+    )
+    .await;
 
     api.auth(&cred.refresh_token).await.map_err(|e| {
         let msg = format!("Pixiv auth failed for credential {}: {}", credential_id, e);

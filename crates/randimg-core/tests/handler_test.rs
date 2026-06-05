@@ -31,6 +31,7 @@ fn make_test_config() -> AppConfig {
         pixiv_refresh_token: "".into(),
         pixiv_proxy: "".into(),
         pixiv_accept_lang: "en".into(),
+        pixiv_timeout_secs: 30,
         log_level: "info".into(),
         log_dir: "/tmp/logs".into(),
         log_json: false,

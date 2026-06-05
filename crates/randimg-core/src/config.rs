@@ -55,6 +55,8 @@ pub struct AppConfig {
     pub pixiv_refresh_token: String,
     pub pixiv_proxy: String,
     pub pixiv_accept_lang: String,
+    /// Pixiv API request timeout in seconds (default: 30)
+    pub pixiv_timeout_secs: u64,
     pub log_level: String,
     pub log_dir: String,
     pub log_json: bool,
@@ -109,6 +111,7 @@ impl std::fmt::Debug for AppConfig {
             .field("pixiv_refresh_token", &"[REDACTED]")
             .field("pixiv_proxy", &self.pixiv_proxy)
             .field("pixiv_accept_lang", &self.pixiv_accept_lang)
+            .field("pixiv_timeout_secs", &self.pixiv_timeout_secs)
             .field("log_level", &self.log_level)
             .field("log_dir", &self.log_dir)
             .field("log_json", &self.log_json)
@@ -169,6 +172,10 @@ impl AppConfig {
             pixiv_proxy: env::var("PIXIV_PROXY").unwrap_or_default(),
             pixiv_accept_lang: env::var("PIXIV_ACCEPT_LANG")
                 .unwrap_or_else(|_| "zh-CN".into()),
+            pixiv_timeout_secs: env::var("PIXIV_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
             log_level: env::var("RUST_LOG")
                 .unwrap_or_else(|_| "info,randimg_core=debug,tower_http=info,fang=debug".into()),
             log_dir: env::var("LOG_DIR").unwrap_or_else(|_| "./logs".into()),

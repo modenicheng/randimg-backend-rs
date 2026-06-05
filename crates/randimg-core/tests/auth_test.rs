@@ -29,6 +29,8 @@ fn test_verify_token_expired() {
     let claims = Claims {
         sub: "alice".to_string(),
         exp: (chrono::Utc::now() - chrono::Duration::hours(1)).timestamp() as usize,
+        iss: "randimg".to_string(),
+        aud: "randimg-api".to_string(),
     };
     let token = encode(
         &Header::default(),
