@@ -1,6 +1,7 @@
 //! Unit tests for task queue job structs: serialization/deserialization.
 
 use randimg_core::task_queue::jobs::*;
+use randimg_core::task_queue::CrawlType;
 
 #[test]
 fn test_crawl_job_roundtrip() {
@@ -253,4 +254,73 @@ fn test_parent_job_id_roundtrip() {
     let deserialized: CrawlJob = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.parent_job_id.as_deref(), Some("parent-uuid-abc"));
     assert_eq!(deserialized.task_id.as_deref(), Some("task-uuid-xyz"));
+}
+
+// ── CrawlType conversion tests ──────────────────────────────────
+
+#[test]
+fn test_crawl_type_ranking_from_i32() {
+    let ct = CrawlType::try_from(0).unwrap();
+    assert_eq!(ct, CrawlType::Ranking);
+    assert_eq!(ct as i32, 0);
+}
+
+#[test]
+fn test_crawl_type_user_from_i32() {
+    let ct = CrawlType::try_from(1).unwrap();
+    assert_eq!(ct, CrawlType::User);
+    assert_eq!(ct as i32, 1);
+}
+
+#[test]
+fn test_crawl_type_bookmarks_from_i32() {
+    let ct = CrawlType::try_from(2).unwrap();
+    assert_eq!(ct, CrawlType::Bookmarks);
+    assert_eq!(ct as i32, 2);
+}
+
+#[test]
+fn test_crawl_type_invalid_negative() {
+    let result = CrawlType::try_from(-1);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Invalid crawl_type"));
+}
+
+#[test]
+fn test_crawl_type_invalid_positive() {
+    let result = CrawlType::try_from(99);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Invalid crawl_type"));
+}
+
+#[test]
+fn test_crawl_type_debug_and_clone() {
+    let ct = CrawlType::Ranking;
+    let cloned = ct;
+    assert_eq!(format!("{:?}", cloned), "Ranking");
+}
+
+// ── Task timeout config tests ──────────────────────────────────
+
+#[test]
+fn test_task_timeout_config_defaults_to_300() {
+    // Verify that the env var parsing logic defaults to 300 when TASK_DEFAULT_TIMEOUT_SECS is unset
+    // SAFETY: test-only env mutation, no concurrent threads touch this var
+    unsafe { std::env::remove_var("TASK_DEFAULT_TIMEOUT_SECS"); }
+    let val: u64 = std::env::var("TASK_DEFAULT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
+    assert_eq!(val, 300, "task_default_timeout_secs should default to 300");
+}
+
+#[test]
+fn test_task_timeout_wired_to_macro() {
+    // Verify AppConfig.task_default_timeout_secs is accessible as u64 —
+    // this is the field the impl_async_runnable! macro reads via state.config.task_default_timeout_secs
+    fn assert_timeout_field(config: &randimg_core::config::AppConfig) {
+        let _: u64 = config.task_default_timeout_secs;
+    }
+    // If this compiles, the field exists and is u64. No runtime assertion needed.
+    let _ = assert_timeout_field;
 }

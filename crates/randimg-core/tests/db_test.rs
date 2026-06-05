@@ -464,10 +464,19 @@ fn make_test_config() -> randimg_core::config::AppConfig {
         color_extract_max_iter: 50,
         color_extract_batch_size: 2048,
         color_extract_image_scale: 0.5,
+        auth_max_retries: 3,
+        auth_backoff_base_ms: 500,
         task_max_retries: 3,
         task_backoff_base: 2,
         task_poll_interval_ms: 500,
         task_default_timeout_secs: 300,
+        task_dedup_ttl_secs: 300,
+        task_cleanup_ttl_hours: 168,
+        dead_letter_ttl_hours: 720,
+        drain_timeout_secs: 30,
+        worker_health_port: 8001,
+        watchdog_check_interval_secs: 30,
+        watchdog_stuck_timeout_secs: 120,
         task_concurrency_crawl: 2,
         task_concurrency_download: 4,
         task_concurrency_color_extract: 2,
@@ -475,6 +484,7 @@ fn make_test_config() -> randimg_core::config::AppConfig {
         task_concurrency_accessibility_check: 2,
         task_concurrency_discover: 1,
         task_concurrency_refresh_pixiv_token: 1,
+        task_concurrency_cleanup: 1,
     }
 }
 
@@ -866,6 +876,58 @@ async fn test_soft_deleted_image_excluded_from_list() {
         None, None, None, false, &config,
     ).await.unwrap();
     assert_eq!(results.len(), 0);
+}
+
+// ── Task Increment Retry Tests ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_task_increment_retry_from_zero() {
+    let db = setup_db().await;
+    let task = randimg_core::db::query::task::create(
+        &db, "crawl", None, None, None, None, Some("{}"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(task.retry_count, 0);
+
+    randimg_core::db::query::task::increment_retry(&db, &task.id)
+        .await
+        .unwrap();
+
+    let updated = randimg_core::db::query::task::find_by_id(&db, &task.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.retry_count, 1);
+}
+
+#[tokio::test]
+async fn test_task_increment_retry_idempotent() {
+    let db = setup_db().await;
+    let task = randimg_core::db::query::task::create(
+        &db, "crawl", None, None, None, None, Some("{}"),
+    )
+    .await
+    .unwrap();
+
+    for expected in 1..=3 {
+        randimg_core::db::query::task::increment_retry(&db, &task.id)
+            .await
+            .unwrap();
+        let updated = randimg_core::db::query::task::find_by_id(&db, &task.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.retry_count, expected);
+    }
+}
+
+#[tokio::test]
+async fn test_task_increment_retry_not_found_is_noop() {
+    let db = setup_db().await;
+    // Should not error when task doesn't exist
+    let result = randimg_core::db::query::task::increment_retry(&db, "nonexistent-id").await;
+    assert!(result.is_ok());
 }
 
 // ── Derived status flag tests (pure function, no DB needed) ─────────────────

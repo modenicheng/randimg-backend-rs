@@ -48,10 +48,19 @@ fn make_test_config() -> AppConfig {
         color_extract_max_iter: 50,
         color_extract_batch_size: 2048,
         color_extract_image_scale: 0.5,
+        auth_max_retries: 3,
+        auth_backoff_base_ms: 500,
         task_max_retries: 3,
         task_backoff_base: 2,
         task_poll_interval_ms: 500,
         task_default_timeout_secs: 300,
+        task_dedup_ttl_secs: 300,
+        task_cleanup_ttl_hours: 168,
+        dead_letter_ttl_hours: 720,
+        drain_timeout_secs: 30,
+        worker_health_port: 8001,
+        watchdog_check_interval_secs: 30,
+        watchdog_stuck_timeout_secs: 120,
         task_concurrency_crawl: 2,
         task_concurrency_download: 4,
         task_concurrency_color_extract: 2,
@@ -59,6 +68,7 @@ fn make_test_config() -> AppConfig {
         task_concurrency_accessibility_check: 2,
         task_concurrency_discover: 1,
         task_concurrency_refresh_pixiv_token: 1,
+        task_concurrency_cleanup: 1,
     }
 }
 
@@ -84,8 +94,15 @@ async fn build_test_router(db: DatabaseConnection, config: AppConfig) -> axum::R
         db,
         config,
         oss: randimg_core::dogecloud::DogeCloudOss::new_noop(),
-        queue_backend,
+        queue_backend: queue_backend.clone(),
         http_client: reqwest::Client::new(),
+        shutdown_token: tokio_util::sync::CancellationToken::new(),
+        worker_start_time: std::time::Instant::now(),
+        active_tasks: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        discover_cache: std::sync::Arc::new(dashmap::DashMap::new()),
+        fingerprint_cache: queue_backend.fingerprint_cache.clone(),
+        last_activity: std::sync::Arc::new(dashmap::DashMap::new()),
+        stuck_pools: std::sync::Arc::new(dashmap::DashMap::new()),
     });
 
     axum::Router::new()
