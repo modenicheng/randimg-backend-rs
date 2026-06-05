@@ -15,7 +15,7 @@ impl MigrationTrait for Migration {
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE TYPE task_status AS ENUM ('pending', 'queued', 'running', 'done', 'failed', 'killed', 'dead')",
+                "CREATE TYPE IF NOT EXISTS task_status AS ENUM ('pending', 'queued', 'running', 'done', 'failed', 'killed', 'dead')",
             )
             .await?;
 
@@ -26,11 +26,33 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Convert columns (with USING clause for type casting)
+        // Convert columns — drop DEFAULT first (TEXT default can't auto-cast to ENUM),
+        // change type, then re-set DEFAULT with explicit ENUM cast.
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "ALTER TABLE tasks ALTER COLUMN status DROP DEFAULT",
+            )
+            .await?;
+
         manager
             .get_connection()
             .execute_unprepared(
                 "ALTER TABLE tasks ALTER COLUMN status TYPE task_status USING status::task_status",
+            )
+            .await?;
+
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "ALTER TABLE tasks ALTER COLUMN status SET DEFAULT 'pending'::task_status",
+            )
+            .await?;
+
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "ALTER TABLE tasks ALTER COLUMN task_type DROP DEFAULT",
             )
             .await?;
 
@@ -45,10 +67,24 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Convert back to TEXT
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE tasks ALTER COLUMN status DROP DEFAULT")
+            .await?;
+
         manager
             .get_connection()
             .execute_unprepared("ALTER TABLE tasks ALTER COLUMN status TYPE text")
+            .await?;
+
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE tasks ALTER COLUMN status SET DEFAULT 'pending'")
+            .await?;
+
+        manager
+            .get_connection()
+            .execute_unprepared("ALTER TABLE tasks ALTER COLUMN task_type DROP DEFAULT")
             .await?;
 
         manager
