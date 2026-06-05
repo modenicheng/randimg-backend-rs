@@ -15,14 +15,14 @@ impl MigrationTrait for Migration {
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE TYPE IF NOT EXISTS task_status AS ENUM ('pending', 'queued', 'running', 'done', 'failed', 'killed', 'dead')",
+                "DO $$ BEGIN CREATE TYPE task_status AS ENUM ('pending', 'queued', 'running', 'done', 'failed', 'killed', 'dead'); EXCEPTION WHEN duplicate_object THEN null; END $$",
             )
             .await?;
 
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE TYPE task_type AS ENUM ('crawl', 'download', 'color_extract', 'upload', 'accessibility_check', 'discover', 'refresh_pixiv_token', 'cleanup')",
+                "DO $$ BEGIN CREATE TYPE task_type AS ENUM ('crawl', 'download', 'color_extract', 'upload', 'accessibility_check', 'discover', 'refresh_pixiv_token', 'cleanup'); EXCEPTION WHEN duplicate_object THEN null; END $$",
             )
             .await?;
 
