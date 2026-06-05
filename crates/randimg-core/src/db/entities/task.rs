@@ -48,7 +48,7 @@ pub struct Model {
     pub retry_count: i32,
 
     /// 任务进度百分比 (0.0 ~ 100.0)
-    pub progress: f64,
+    pub progress: f32,
 
     /// 优先级（数值越小，优先级越高）
     pub priority: i32,
