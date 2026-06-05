@@ -2,6 +2,7 @@ use crate::db::entities::task::{self, Entity as Task};
 use crate::db::entities::task_enum::{TaskStatus, TaskType};
 use chrono::{DateTime, Utc};
 use sea_orm::*;
+use sea_orm::sea_query::Expr;
 use sea_orm::Condition;
 use serde_json::Value as JsonValue;
 
@@ -182,7 +183,7 @@ pub async fn count_roots(
 // Children → full task details (hierarchical)
 // ---------------------------------------------------------------------------
 
-/// Return all child tasks for `parent_id`, optionally filtered by type/status.
+/// Return all child tasks for `parent_id`, optionally filtered by type/status/crawl_type.
 ///
 /// NOTE: Filtering/pagination is applied to each level independently.
 /// The entire subtree is still traversed recursively up to `max_depth` levels.
@@ -191,6 +192,7 @@ pub async fn list_children(
     parent_id: &str,
     task_type: Option<&TaskType>,
     status: Option<&[TaskStatus]>,
+    crawl_type: Option<i32>,
     max_depth: u32,
 ) -> Result<Vec<ChildJobNode>, DbErr> {
     if max_depth == 0 {
@@ -204,13 +206,19 @@ pub async fn list_children(
     if let Some(sts) = status {
         q = q.filter(task::Column::Status.is_in(sts.iter().cloned()));
     }
+    if let Some(ct) = crawl_type {
+        q = q.filter(Expr::cust_with_values(
+            "(params::json->>'crawl_type')::int = $1",
+            [ct],
+        ));
+    }
 
     let tasks = q.order_by_desc(task::Column::CreatedAt).all(db).await?;
 
     // Recursively build children for each node, converting Model → JsonValue.
     let mut result = Vec::with_capacity(tasks.len());
     for t in tasks {
-        let children = Box::pin(list_children(db, &t.id, task_type, status, max_depth - 1)).await?;
+        let children = Box::pin(list_children(db, &t.id, task_type, status, crawl_type, max_depth - 1)).await?;
         result.push(ChildJobNode {
             job: model_to_json(&t),
             children,

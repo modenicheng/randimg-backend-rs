@@ -654,6 +654,9 @@ fn flatten_tree(nodes: &[ChildJobNode], parent_id: &str, root_id: &str) -> Vec<s
 
 #[derive(Debug, Deserialize)]
 pub struct TaskTreeQuery {
+    pub task_type: Option<String>,
+    pub crawl_type: Option<i32>,
+    pub status: Option<String>,
     pub flatten: Option<bool>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
@@ -664,6 +667,15 @@ pub struct TaskTreeQuery {
 /// Returns the task tree rooted at `id`.
 ///
 /// # Query Parameters
+///
+/// - `task_type` (optional): Filter by job type (e.g. `crawl`, `download`, `color_extract`).
+///   Accepts both hyphenated and underscored names.
+///
+/// - `crawl_type` (optional): Filter crawl tasks by crawl_type (0=ranking, 1=user, 2=bookmarks).
+///   Only effective when `task_type` is `crawl`.
+///
+/// - `status` (optional): Filter by status. Valid values: `pending`, `running`, `completed`, `failed`, `killed`.
+///   Note: `pending` maps to both `Pending` and `Queued` statuses.
 ///
 /// - `flatten` (optional, default: `false`)
 ///   - When `false` (default): Returns nested tree structure with `children` arrays.
@@ -703,11 +715,23 @@ pub async fn get_task_tree(
     Path(task_id): Path<String>,
     Query(q): Query<TaskTreeQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
+
+    let mapped_status: Option<Vec<TaskStatus>> = q.status.as_deref().map(|s| match s {
+        "pending"   => vec![TaskStatus::Pending, TaskStatus::Queued],
+        "running"   => vec![TaskStatus::Running],
+        "completed" => vec![TaskStatus::Done],
+        "failed"    => vec![TaskStatus::Failed],
+        "killed"    => vec![TaskStatus::Killed],
+        _           => vec![TaskStatus::Pending, TaskStatus::Queued],
+    });
+
     let tree = query::task_tree::list_children(
         &state.db,
         &task_id,
-        None,
-        None,
+        parsed_type.as_ref(),
+        mapped_status.as_deref(),
+        q.crawl_type,
         20,
     )
     .await

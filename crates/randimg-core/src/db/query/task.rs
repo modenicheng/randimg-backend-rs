@@ -76,7 +76,7 @@ pub async fn delete_pending(
     .await
 }
 
-/// 按状态批量删除任务，返回删除的任务数量。
+/// 按状态删除任务，对根任务使用派生状态判断（避免删除有活跃子任务的根）。
 pub async fn delete_by_statuses(
     db: &DatabaseConnection,
     statuses: &[TaskStatus],
@@ -86,14 +86,66 @@ pub async fn delete_by_statuses(
         return Ok(0);
     }
 
-    let mut q = Task::delete_many()
-        .filter(task::Column::Status.is_in(statuses.iter().cloned()));
+    let status_values: Vec<String> = statuses.iter().map(|s| format!("'{}'", s.as_str())).collect();
+    let status_list = status_values.join(",");
+
+    let mut type_filter = String::new();
+    let mut bind_values: Vec<Value> = Vec::new();
     if let Some(tt) = task_type {
-        q = q.filter(task::Column::TaskType.eq(tt.clone()));
+        bind_values.push(Value::from(tt.as_str()));
+        type_filter = " AND t.task_type::text = $1".to_string();
     }
 
-    let result = q.exec(db).await?;
-    Ok(result.rows_affected)
+    let sql = format!(
+        r#"
+        WITH RECURSIVE
+            descendants AS (
+                SELECT t.id AS root_id, c.id AS descendant_id
+                FROM tasks t
+                JOIN tasks c ON c.parent_id = t.id
+                WHERE t.parent_id IS NULL
+                UNION ALL
+                SELECT d.root_id, c.id
+                FROM descendants d
+                JOIN tasks c ON c.parent_id = d.descendant_id
+            ),
+            root_flags AS (
+                SELECT
+                    d.root_id,
+                    BOOL_OR(t2.status::text IN ('pending','queued','running')) AS has_active,
+                    BOOL_OR(t2.status::text IN ('failed','killed'))            AS has_failed,
+                    BOOL_OR(t2.status::text = 'done')                          AS has_completed
+                FROM descendants d
+                JOIN tasks t2 ON t2.id = d.descendant_id
+                GROUP BY d.root_id
+            ),
+            root_derived_status AS (
+                SELECT
+                    t.id AS root_id,
+                    CASE
+                        WHEN COALESCE(rf.has_active, false) THEN 'running'
+                        WHEN COALESCE(rf.has_failed, false) AND COALESCE(rf.has_completed, false) THEN 'partial_success'
+                        WHEN COALESCE(rf.has_failed, false) THEN 'failed'
+                        WHEN COALESCE(rf.has_completed, false) THEN 'completed'
+                        ELSE 'pending'
+                    END AS derived_status
+                FROM tasks t
+                LEFT JOIN root_flags rf ON rf.root_id = t.id
+                WHERE t.parent_id IS NULL
+            ),
+            deletable_roots AS (
+                SELECT root_id FROM root_derived_status WHERE derived_status IN ({status_list})
+            )
+        DELETE FROM tasks
+        WHERE id IN (SELECT root_id FROM deletable_roots)
+           OR (parent_id IS NOT NULL AND status::text IN ({status_list}) {type_filter})
+        "#
+    );
+
+    let stmt = Statement::from_sql_and_values(db.get_database_backend(), sql, bind_values);
+    let result = db.execute(stmt).await?;
+
+    Ok(result.rows_affected())
 }
 
 /// 按状态和 ID 列表批量删除任务
