@@ -13,6 +13,13 @@ mod m20260603_000001_add_illust_metadata;
 mod m20260603_002_create_tasks_table;
 mod m20260604_001_alter_fang_task_id_to_text;
 mod m20260604_002_fix_primary_lab_type;
+mod m20260605_001_add_task_indexes;
+mod m20260605_002_drop_task_dependencies;
+mod m20260605_003_create_dead_letter;
+mod m20260605_004_add_task_priority;
+mod m20260605_005_add_task_progress;
+mod m20260605_006_params_text_to_jsonb;
+mod m20260605_007_add_enum_types;
 
 pub struct Migrator;
 
@@ -33,6 +40,13 @@ impl MigratorTrait for Migrator {
             Box::new(m20260603_002_create_tasks_table::Migration),
             Box::new(m20260604_001_alter_fang_task_id_to_text::Migration),
             Box::new(m20260604_002_fix_primary_lab_type::Migration),
+            Box::new(m20260605_001_add_task_indexes::Migration),
+            Box::new(m20260605_002_drop_task_dependencies::Migration),
+            Box::new(m20260605_003_create_dead_letter::Migration),
+            Box::new(m20260605_004_add_task_priority::Migration),
+            Box::new(m20260605_005_add_task_progress::Migration),
+            Box::new(m20260605_006_params_text_to_jsonb::Migration),
+            Box::new(m20260605_007_add_enum_types::Migration),
         ]
     }
 }

@@ -17,6 +17,7 @@ pub const STATUS_RUNNING: &str = "running";
 pub const STATUS_DONE: &str = "done";
 pub const STATUS_FAILED: &str = "failed";
 pub const STATUS_KILLED: &str = "killed";
+pub const STATUS_DEAD: &str = "dead";
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "tasks")]
@@ -54,6 +55,12 @@ pub struct Model {
 
     /// 重试次数
     pub retry_count: i32,
+
+    /// 任务进度百分比 (0.0 ~ 100.0)
+    pub progress: f64,
+
+    /// 优先级（数值越小，优先级越高）
+    pub priority: i32,
 
     /// 创建时间
     pub created_at: DateTimeWithTimeZone,
