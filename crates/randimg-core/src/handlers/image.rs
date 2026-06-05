@@ -108,8 +108,8 @@ pub async fn random_image(
     State(state): State<Arc<WorkerState>>,
     Query(query): Query<RandomQuery>,
 ) -> Result<Response, AppError> {
-    let ratio_floor = query.ratio_floor.unwrap_or(0.0);
-    let ratio_ceil = query.ratio_ceil.unwrap_or(10.0);
+    let ratio_floor = query.ratio_floor.unwrap_or(0.0).max(0.0);
+    let ratio_ceil = query.ratio_ceil.unwrap_or(10.0).max(ratio_floor);
     let width_floor = query.width_floor.unwrap_or(0);
     let width_ceil = query.width_ceil.unwrap_or(i32::MAX);
     let height_floor = query.height_floor.unwrap_or(0);
@@ -169,7 +169,7 @@ pub async fn list_images(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     let is_admin = auth.username.is_some();
 
-    let offset = query.offset.unwrap_or(0);
+    let offset = query.offset.unwrap_or(0).min(100_000);
     let limit = query.limit.unwrap_or(30).min(300);
 
     let desc = query
@@ -265,11 +265,16 @@ pub async fn patch_image(
         }
     }
 
-    // Validate title: must not be empty string
+    // Validate title: must not be empty string and not exceed 1000 chars
     if let Some(ref title) = body.title {
         if title.is_empty() {
             return Err(AppError::BadRequest(
                 "title must not be an empty string".into(),
+            ));
+        }
+        if title.len() > 1000 {
+            return Err(AppError::BadRequest(
+                "title must not exceed 1000 characters".into(),
             ));
         }
     }

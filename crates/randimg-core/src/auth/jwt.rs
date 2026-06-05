@@ -8,6 +8,8 @@ use crate::error::AppError;
 pub struct Claims {
     pub sub: String,
     pub exp: usize,
+    pub iss: String,
+    pub aud: String,
 }
 
 pub fn create_token(username: &str, secret: &str, expire_minutes: u64) -> Result<String, AppError> {
@@ -19,10 +21,14 @@ pub fn create_token(username: &str, secret: &str, expire_minutes: u64) -> Result
     let claims = Claims {
         sub: username.to_string(),
         exp: expiration,
+        iss: "randimg".to_string(),
+        aud: "randimg-api".to_string(),
     };
 
+    let mut header = Header::default();
+    header.kid = Some("randimg-main".to_string());
     encode(
-        &Header::default(),
+        &header,
         &claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
@@ -30,10 +36,13 @@ pub fn create_token(username: &str, secret: &str, expire_minutes: u64) -> Result
 }
 
 pub fn verify_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let mut validation = Validation::default();
+    validation.set_issuer(&["randimg"]);
+    validation.set_audience(&["randimg-api"]);
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
+        &validation,
     )?;
     Ok(token_data.claims)
 }

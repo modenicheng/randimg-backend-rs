@@ -25,12 +25,22 @@ pub async fn login(
         .await
         .map_err(AppError::from)?;
 
-    let admin = admin.ok_or(AppError::Unauthorized)?;
+    // Constant-time validation: always run Argon2 to prevent timing attacks
+    // that could enumerate valid usernames
+    let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$someinvalidhash";
+    let password_ok = match &admin {
+        Some(a) => verify_password(&body.password, &a.password),
+        None => {
+            verify_password(&body.password, dummy_hash);
+            false
+        }
+    };
 
-    if !verify_password(&body.password, &admin.password) {
+    if !password_ok {
         return Err(AppError::Unauthorized);
     }
 
+    let admin = admin.unwrap();
     let token = create_token(
         &admin.username,
         &state.config.secret_key,

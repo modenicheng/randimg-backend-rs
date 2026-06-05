@@ -41,7 +41,7 @@ impl BindAddr {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppConfig {
     /// API 数据库 (SeaORM) — 存储业务数据和自定义任务表
     pub api_database_url: String,
@@ -94,6 +94,50 @@ pub struct AppConfig {
     pub task_concurrency_accessibility_check: u32,
     pub task_concurrency_discover: u32,
     pub task_concurrency_refresh_pixiv_token: u32,
+}
+
+impl std::fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("api_database_url", &"[REDACTED]")
+            .field("queue_database_url", &"[REDACTED]")
+            .field("secret_key", &"[REDACTED]")
+            .field("jwt_expire_minutes", &self.jwt_expire_minutes)
+            .field("cdn_base_url", &self.cdn_base_url)
+            .field("image_dir", &self.image_dir)
+            .field("server_addr", &self.server_addr)
+            .field("pixiv_refresh_token", &"[REDACTED]")
+            .field("pixiv_proxy", &self.pixiv_proxy)
+            .field("pixiv_accept_lang", &self.pixiv_accept_lang)
+            .field("log_level", &self.log_level)
+            .field("log_dir", &self.log_dir)
+            .field("log_json", &self.log_json)
+            .field("max_discover_hops", &self.max_discover_hops)
+            .field("discover_seed_limit", &self.discover_seed_limit)
+            .field("dogecloud_access_key", &"[REDACTED]")
+            .field("dogecloud_secret_key", &"[REDACTED]")
+            .field("dogecloud_s3_bucket", &self.dogecloud_s3_bucket)
+            .field("dogecloud_s3_endpoint", &self.dogecloud_s3_endpoint)
+            .field("color_worker_rayon_threads", &self.color_worker_rayon_threads)
+            .field("color_worker_standalone", &self.color_worker_standalone)
+            .field("color_extract_k", &self.color_extract_k)
+            .field("color_extract_max_iter", &self.color_extract_max_iter)
+            .field("color_extract_batch_size", &self.color_extract_batch_size)
+            .field("color_extract_image_scale", &self.color_extract_image_scale)
+            .field("cors_origins", &self.cors_origins)
+            .field("task_max_retries", &self.task_max_retries)
+            .field("task_backoff_base", &self.task_backoff_base)
+            .field("task_poll_interval_ms", &self.task_poll_interval_ms)
+            .field("task_default_timeout_secs", &self.task_default_timeout_secs)
+            .field("task_concurrency_crawl", &self.task_concurrency_crawl)
+            .field("task_concurrency_download", &self.task_concurrency_download)
+            .field("task_concurrency_color_extract", &self.task_concurrency_color_extract)
+            .field("task_concurrency_upload", &self.task_concurrency_upload)
+            .field("task_concurrency_accessibility_check", &self.task_concurrency_accessibility_check)
+            .field("task_concurrency_discover", &self.task_concurrency_discover)
+            .field("task_concurrency_refresh_pixiv_token", &self.task_concurrency_refresh_pixiv_token)
+            .finish()
+    }
 }
 
 impl AppConfig {

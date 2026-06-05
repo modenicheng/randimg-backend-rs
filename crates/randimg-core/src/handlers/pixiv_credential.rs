@@ -90,11 +90,22 @@ pub async fn get_credential(
 }
 
 /// GET /pixiv-credential/{id}/token  — exposes the actual refresh_token (sensitive)
+/// This endpoint requires admin-level access control. In the current implementation,
+/// all authenticated users can access it. Consider restricting to admin-only.
 pub async fn get_credential_token(
     State(state): State<Arc<WorkerState>>,
     Path(id): Path<i32>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // SECURITY: This endpoint exposes sensitive Pixiv tokens.
+    // TODO: Add admin role check when role-based access control is implemented.
+    // For now, log access attempts for audit trail.
+    tracing::warn!(
+        user = %_auth.username,
+        credential_id = id,
+        "Pixiv token access requested — verify this user should have access"
+    );
+
     let cred = query::pixiv_credential::find_by_id(&state.db, id)
         .await
         .map_err(AppError::from)?

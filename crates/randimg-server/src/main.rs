@@ -1,4 +1,5 @@
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::HeaderValue;
 use randimg_core::config::{AppConfig, BindAddr};
 use randimg_core::{WorkerState, db, db::query, db_backend, handlers};
@@ -186,6 +187,9 @@ async fn main() {
     };
     let routes_list = "health, image, auth, tag, statistic, author, crawler, task, pixiv_credential";
 
+    // Mask password in database URLs for logging
+    let masked_api_db = mask_database_url(&config.api_database_url);
+
     tracing::info!(
         "Randimg API Server — v{}\n\
          Environment : {env_name}\n\
@@ -196,7 +200,7 @@ async fn main() {
          Log Dir     : {}\n\
          Routes      : {routes_list}\n\
          Starting HTTP server…",
-        env!("CARGO_PKG_VERSION"), config.api_database_url, config.log_level, config.log_dir,
+        env!("CARGO_PKG_VERSION"), masked_api_db, config.log_level, config.log_dir,
     );
 
     let cors = if state.worker.config.cors_origins == "*" {
@@ -229,6 +233,7 @@ async fn main() {
         .merge(handlers::task::routes())
         .merge(handlers::pixiv_credential::routes())
         .nest_service("/images", ServeDir::new(&config.image_dir))
+        .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(Arc::new(state.worker.clone()));
@@ -238,7 +243,7 @@ async fn main() {
             let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
             tracing::info!(
                 address = %listener.local_addr().unwrap(),
-                database = %config.api_database_url,
+                database = %mask_database_url(&config.api_database_url),
                 "Server started (TCP)"
             );
             axum::serve(listener, app)
@@ -255,7 +260,7 @@ async fn main() {
             let listener = tokio::net::UnixListener::bind(path).unwrap();
             tracing::info!(
                 socket = %path.display(),
-                database = %config.api_database_url,
+                database = %mask_database_url(&config.api_database_url),
                 "Server started (Unix socket)"
             );
             axum::serve(listener, app)
@@ -266,6 +271,21 @@ async fn main() {
     }
 
     tracing::info!("Shutdown complete");
+}
+
+/// Mask password in database URL for safe logging.
+/// `postgres://user:secret@host/db` → `postgres://user:***@host/db`
+fn mask_database_url(url: &str) -> String {
+    if let Some(at_pos) = url.find('@') {
+        if let Some(slash_pos) = url[..at_pos].rfind('/') {
+            let prefix_end = slash_pos + 2; // skip "://"
+            if prefix_end < at_pos {
+                let masked = format!("{}{}{}", &url[..prefix_end], "***", &url[at_pos..]);
+                return masked;
+            }
+        }
+    }
+    url.to_string()
 }
 
 async fn shutdown_signal() {
