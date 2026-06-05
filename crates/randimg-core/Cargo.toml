@@ -95,6 +95,10 @@ path = "examples/oss_upload_demo.rs"
 name = "remove_placeholder_images"
 path = "examples/remove_placeholder_images.rs"
 
+[[example]]
+name = "remove_manga"
+path = "examples/remove_manga.rs"
+
 [dev-dependencies]
 reqwest = { workspace = true }
 serde_json = { workspace = true }
