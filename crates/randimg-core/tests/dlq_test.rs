@@ -1,6 +1,7 @@
 use migration::MigratorTrait;
 use sea_orm::{Database, DatabaseConnection};
 use serde_json::json;
+use randimg_core::db::entities::task_enum::{TaskStatus, TaskType};
 
 async fn setup_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
@@ -17,7 +18,7 @@ async fn test_dead_letter_insert_and_list() {
     let db = setup_db().await;
 
     let task = randimg_core::db::query::task::create(
-        &db, "crawl", None, None, None, None, Some(r#"{"target":"test"}"#),
+        &db, TaskType::Crawl, None, None, None, None, Some(r#"{"target":"test"}"#),
     )
     .await
     .unwrap();
@@ -82,7 +83,7 @@ async fn test_dead_letter_requeue() {
     let db = setup_db().await;
 
     let task = randimg_core::db::query::task::create(
-        &db, "download", None, None, None, None, Some(r#"{"image_id":42}"#),
+        &db, TaskType::Download, None, None, None, None, Some(r#"{"image_id":42}"#),
     )
     .await
     .unwrap();
@@ -103,10 +104,10 @@ async fn test_dead_letter_requeue() {
         .await
         .unwrap();
 
-    assert_eq!(new_task.task_type, "download");
+    assert_eq!(new_task.task_type, TaskType::Download);
     assert_eq!(new_task.params.as_deref(), Some(r#"{"image_id":42}"#));
     assert_eq!(new_task.retry_count, 0);
-    assert_eq!(new_task.status, randimg_core::db::entities::task::STATUS_PENDING);
+    assert_eq!(new_task.status, TaskStatus::Pending);
     assert_ne!(new_task.id, task.id);
 
     let dl_gone = randimg_core::db::query::dead_letter::get_dead_letter(&db, &dl.id)
@@ -125,7 +126,7 @@ async fn test_dead_letter_delete() {
     let db = setup_db().await;
 
     let task = randimg_core::db::query::task::create(
-        &db, "upload", None, None, None, None, None,
+        &db, TaskType::Upload, None, None, None, None, None,
     )
     .await
     .unwrap();
@@ -154,5 +155,5 @@ async fn test_dead_letter_delete() {
 
 #[tokio::test]
 async fn test_dead_letter_status_constant() {
-    assert_eq!(randimg_core::db::entities::task::STATUS_DEAD, "dead");
+    assert_eq!(TaskStatus::Dead.as_str(), "dead");
 }

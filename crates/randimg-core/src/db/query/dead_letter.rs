@@ -73,9 +73,11 @@ pub async fn requeue_dead_letter(
         )))?;
 
     // Create a new task from the dead letter data
+    let task_type: crate::db::entities::task_enum::TaskType = dl.task_type.parse()
+        .map_err(|e: String| DbErr::Custom(format!("Invalid task type '{}': {}", dl.task_type, e)))?;
     let new_task = super::task::create(
         db,
-        &dl.task_type,
+        task_type,
         None,  // parent_id: original parent may no longer exist
         None,  // root_id
         None,  // crawler_id

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::WorkerState;
-use crate::db::entities::task;
+use crate::db::entities::task_enum::TaskStatus;
 use crate::db::query;
 use super::handlers;
 use serde_json::json;
@@ -51,7 +51,7 @@ async fn maybe_move_to_dead_letter(
         "Task exceeded max retries, moving to dead letter queue"
     );
 
-    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DEAD).await {
+    if let Err(e) = query::task::update_status(&state.db, task_id, TaskStatus::Dead).await {
         tracing::error!(task_id, error = %e, "Failed to update task status to dead");
     }
 
@@ -102,7 +102,7 @@ macro_rules! impl_async_runnable {
 
                 // Update status to running
                 if let Some(ref task_id) = self.task_id {
-                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_RUNNING).await {
+                    if let Err(e) = query::task::update_status(&state.db, task_id, TaskStatus::Running).await {
                         tracing::error!(task_id, error = %e, "Failed to update task status to running");
                     }
                 }
@@ -120,12 +120,12 @@ macro_rules! impl_async_runnable {
                         if let Some(ref task_id) = self.task_id {
                             match &result {
                                 Ok(()) => {
-                                    if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_DONE).await {
+                                    if let Err(e) = query::task::update_status(&state.db, task_id, TaskStatus::Done).await {
                                         tracing::error!(task_id, error = %e, "Failed to update task status to done");
                                     }
                                 }
                                 Err(e) => {
-                                    if let Err(update_err) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                                    if let Err(update_err) = query::task::update_status(&state.db, task_id, TaskStatus::Failed).await {
                                         tracing::error!(task_id, error = %update_err, "Failed to update task status to failed");
                                     }
                                     if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
@@ -149,7 +149,7 @@ macro_rules! impl_async_runnable {
                     Err(_elapsed) => {
                         let timeout_msg = format!("Task timed out after {}s", timeout_secs);
                         if let Some(ref task_id) = self.task_id {
-                            if let Err(e) = query::task::update_status(&state.db, task_id, task::STATUS_FAILED).await {
+                            if let Err(e) = query::task::update_status(&state.db, task_id, TaskStatus::Failed).await {
                                 tracing::error!(task_id, error = %e, "Failed to update task status to failed");
                             }
                             if let Err(e) = query::task::update_error(&state.db, task_id, &timeout_msg).await {

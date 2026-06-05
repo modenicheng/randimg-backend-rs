@@ -1,6 +1,7 @@
 use chrono::{TimeZone, Utc};
 use migration::MigratorTrait;
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
+use randimg_core::db::entities::task_enum::{TaskStatus, TaskType};
 
 async fn setup_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
@@ -19,7 +20,7 @@ async fn test_cleanup_deletes_old_done_tasks() {
     let old_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
 
     let task = randimg_core::db::query::task::create(
-        &db, "download", None, None, None, None, None,
+        &db, TaskType::Download, None, None, None, None, None,
     )
     .await
     .unwrap();
@@ -29,7 +30,7 @@ async fn test_cleanup_deletes_old_done_tasks() {
         use randimg_core::db::entities::task::{self, Entity as Task};
         if let Some(t) = Task::find_by_id(task.id.clone()).one(&db).await.unwrap() {
             let mut active: task::ActiveModel = t.into();
-            active.status = Set(task::STATUS_DONE.to_string());
+            active.status = Set(TaskStatus::Done);
             active.completed_at = Set(Some(old_time.into()));
             active.update(&db).await.unwrap();
         }
@@ -37,7 +38,7 @@ async fn test_cleanup_deletes_old_done_tasks() {
 
     let deleted = randimg_core::db::query::task::delete_by_statuses_and_older_than(
         &db,
-        &[randimg_core::db::entities::task::STATUS_DONE],
+        &[TaskStatus::Done],
         24,
     )
     .await
@@ -56,7 +57,7 @@ async fn test_cleanup_deletes_old_dead_letters() {
     let db = setup_db().await;
 
     let task = randimg_core::db::query::task::create(
-        &db, "crawl", None, None, None, None, None,
+        &db, TaskType::Crawl, None, None, None, None, None,
     )
     .await
     .unwrap();
@@ -102,19 +103,19 @@ async fn test_cleanup_preserves_recent_tasks() {
 
     // Create a task marked as done with recent completed_at (now)
     let task = randimg_core::db::query::task::create(
-        &db, "upload", None, None, None, None, None,
+        &db, TaskType::Upload, None, None, None, None, None,
     )
     .await
     .unwrap();
 
-    randimg_core::db::query::task::update_status(&db, &task.id, "done")
+    randimg_core::db::query::task::update_status(&db, &task.id, TaskStatus::Done)
         .await
         .unwrap();
 
     // Try to delete with 24h TTL — should not delete the just-completed task
     let deleted = randimg_core::db::query::task::delete_by_statuses_and_older_than(
         &db,
-        &["done"],
+        &[TaskStatus::Done],
         24,
     )
     .await

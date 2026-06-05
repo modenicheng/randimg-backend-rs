@@ -22,6 +22,7 @@
 compile_error!("Fang async backend requires the 'queue-postgres' feature.");
 
 use crate::config::AppConfig;
+use crate::db::entities::task_enum::TaskType;
 use crate::db::query;
 use crate::task_queue::fingerprint::FingerprintCache;
 use fang::asynk::async_queue::{AsyncQueue, AsyncQueueable};
@@ -151,6 +152,10 @@ impl QueueBackend {
             return Err("duplicate task fingerprint within TTL".into());
         }
 
+        // Parse task_type string to enum for DB storage
+        let task_type_enum: TaskType = task_type.parse()
+            .map_err(|e: String| format!("Invalid task type '{}': {}", task_type, e))?;
+
         // 开启事务 — API 数据库上的 SeaORM 事务
         let txn = db
             .begin()
@@ -162,7 +167,7 @@ impl QueueBackend {
             query::task::create_with_id(
                 &txn,
                 tid,
-                task_type,
+                task_type_enum.clone(),
                 parent_id,
                 root_id,
                 crawler_id,
@@ -174,7 +179,7 @@ impl QueueBackend {
         } else {
             query::task::create(
                 &txn,
-                task_type,
+                task_type_enum.clone(),
                 parent_id,
                 root_id,
                 crawler_id,

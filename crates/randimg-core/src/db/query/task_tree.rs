@@ -1,4 +1,5 @@
 use crate::db::entities::task::{self, Entity as Task};
+use crate::db::entities::task_enum::{TaskStatus, TaskType};
 use chrono::{DateTime, Utc};
 use sea_orm::*;
 use sea_orm::Condition;
@@ -102,16 +103,16 @@ pub fn derived_status_from_flags(
 // Model → JsonValue helper (avoids needing Serialize on Model)
 // ---------------------------------------------------------------------------
 
-/// Map task status strings to user-friendly labels.
-pub fn status_label(status: &str) -> &'static str {
+/// Map task status enum to user-friendly labels.
+pub fn status_label(status: &TaskStatus) -> &'static str {
     match status {
-        task::STATUS_PENDING => "pending",
-        task::STATUS_QUEUED => "pending",
-        task::STATUS_RUNNING => "running",
-        task::STATUS_DONE => "completed",
-        task::STATUS_FAILED => "failed",
-        task::STATUS_KILLED => "killed",
-        _ => "unknown",
+        TaskStatus::Pending => "pending",
+        TaskStatus::Queued => "pending",
+        TaskStatus::Running => "running",
+        TaskStatus::Done => "completed",
+        TaskStatus::Failed => "failed",
+        TaskStatus::Killed => "killed",
+        TaskStatus::Dead => "dead",
     }
 }
 
@@ -124,9 +125,9 @@ pub fn model_to_json(m: &task::Model) -> JsonValue {
 
     serde_json::json!({
         "id":           m.id,
-        "taskType":     m.task_type,
+        "taskType":     m.task_type.as_str(),
         "status":       status_label(&m.status),
-        "rawStatus":    m.status,
+        "rawStatus":    m.status.as_str(),
         "retryCount":   m.retry_count,
         "createdAt":    created_at,
         "completedAt":  completed_at,
@@ -148,17 +149,17 @@ fn build_roots_query() -> Select<Task> {
 /// Supports optional `task_type` / `status` filters, plus `limit` / `offset`.
 pub async fn list_roots(
     db: &DatabaseConnection,
-    task_type: Option<&str>,
-    status: Option<&[&str]>,
+    task_type: Option<&TaskType>,
+    status: Option<&[TaskStatus]>,
     limit: u64,
     offset: u64,
 ) -> Result<Vec<task::Model>, DbErr> {
     let mut q = build_roots_query().order_by_desc(task::Column::CreatedAt);
     if let Some(tt) = task_type {
-        q = q.filter(task::Column::TaskType.eq(tt));
+        q = q.filter(task::Column::TaskType.eq(tt.clone()));
     }
     if let Some(sts) = status {
-        q = q.filter(task::Column::Status.is_in(sts.iter().map(|s| *s)));
+        q = q.filter(task::Column::Status.is_in(sts.iter().cloned()));
     }
     q.limit(limit).offset(offset).all(db).await
 }
@@ -166,15 +167,15 @@ pub async fn list_roots(
 /// Count root tasks (with optional filters).
 pub async fn count_roots(
     db: &DatabaseConnection,
-    task_type: Option<&str>,
-    status: Option<&[&str]>,
+    task_type: Option<&TaskType>,
+    status: Option<&[TaskStatus]>,
 ) -> Result<u64, DbErr> {
     let mut q = build_roots_query();
     if let Some(tt) = task_type {
-        q = q.filter(task::Column::TaskType.eq(tt));
+        q = q.filter(task::Column::TaskType.eq(tt.clone()));
     }
     if let Some(sts) = status {
-        q = q.filter(task::Column::Status.is_in(sts.iter().map(|s| *s)));
+        q = q.filter(task::Column::Status.is_in(sts.iter().cloned()));
     }
     q.count(db).await
 }
@@ -190,8 +191,8 @@ pub async fn count_roots(
 pub async fn list_children(
     db: &DatabaseConnection,
     parent_id: &str,
-    task_type: Option<&str>,
-    status: Option<&[&str]>,
+    task_type: Option<&TaskType>,
+    status: Option<&[TaskStatus]>,
     max_depth: u32,
 ) -> Result<Vec<ChildJobNode>, DbErr> {
     if max_depth == 0 {
@@ -200,10 +201,10 @@ pub async fn list_children(
 
     let mut q = Task::find().filter(task::Column::ParentId.eq(parent_id));
     if let Some(tt) = task_type {
-        q = q.filter(task::Column::TaskType.eq(tt));
+        q = q.filter(task::Column::TaskType.eq(tt.clone()));
     }
     if let Some(sts) = status {
-        q = q.filter(task::Column::Status.is_in(sts.iter().map(|s| *s)));
+        q = q.filter(task::Column::Status.is_in(sts.iter().cloned()));
     }
 
     let tasks = q.order_by_desc(task::Column::CreatedAt).all(db).await?;
@@ -230,16 +231,16 @@ pub async fn list_children(
 /// Returns `Ok(None)` when the parent has no children at all (short-circuit).
 async fn filtered_subtask_query(
     parent_id: &str,
-    task_type: Option<&str>,
-    status: Option<&[&str]>,
+    task_type: Option<&TaskType>,
+    status: Option<&[TaskStatus]>,
 ) -> Result<Option<sea_orm::Select<Task>>, DbErr> {
     let mut q = Task::find().filter(task::Column::ParentId.eq(parent_id));
 
     if let Some(tt) = task_type {
-        q = q.filter(task::Column::TaskType.eq(tt));
+        q = q.filter(task::Column::TaskType.eq(tt.clone()));
     }
     if let Some(sts) = status {
-        q = q.filter(task::Column::Status.is_in(sts.iter().map(|s| *s)));
+        q = q.filter(task::Column::Status.is_in(sts.iter().cloned()));
     }
 
     Ok(Some(q))
@@ -251,8 +252,8 @@ async fn filtered_subtask_query(
 pub async fn list_subtasks(
     db: &DatabaseConnection,
     parent_id: &str,
-    task_type: Option<&str>,
-    status: Option<&[&str]>,
+    task_type: Option<&TaskType>,
+    status: Option<&[TaskStatus]>,
     limit: Option<u64>,
     offset: Option<u64>,
 ) -> Result<Vec<task::Model>, DbErr> {
@@ -276,8 +277,8 @@ pub async fn list_subtasks(
 pub async fn count_subtasks(
     db: &DatabaseConnection,
     parent_id: &str,
-    task_type: Option<&str>,
-    status: Option<&[&str]>,
+    task_type: Option<&TaskType>,
+    status: Option<&[TaskStatus]>,
 ) -> Result<u64, DbErr> {
     let Some(q) = filtered_subtask_query(parent_id, task_type, status).await? else {
         return Ok(0);
@@ -297,17 +298,17 @@ pub async fn count_subtasks(
 pub async fn interrupt_subtasks(
     db: &DatabaseConnection,
     parent_id: &str,
-    task_type: Option<&str>,
+    task_type: Option<&TaskType>,
 ) -> Result<(Vec<String>, Vec<String>, u64), DbErr> {
     let mut cond = Condition::all()
         .add(task::Column::ParentId.eq(parent_id))
         .add(
             task::Column::Status
-                .is_in([task::STATUS_PENDING, task::STATUS_QUEUED]),
+                .is_in([TaskStatus::Pending, TaskStatus::Queued]),
         );
 
     if let Some(tt) = task_type {
-        cond = cond.add(task::Column::TaskType.eq(tt));
+        cond = cond.add(task::Column::TaskType.eq(tt.clone()));
     }
 
     let to_delete = Task::find().filter(cond).all(db).await?;
@@ -340,7 +341,7 @@ pub async fn interrupt_subtasks(
 /// `derived_status`, plus `limit` / `offset` pagination.
 pub async fn list_roots_derived(
     db: &DatabaseConnection,
-    task_type: Option<&str>,
+    task_type: Option<&TaskType>,
     crawl_type: Option<i32>,
     derived_status: Option<&str>,
     limit: u64,
@@ -352,7 +353,7 @@ pub async fn list_roots_derived(
     // Collect task_type as a bind parameter.
     let has_task_type_filter = task_type.is_some();
     if let Some(tt) = task_type {
-        bind_values.push(Value::from(tt));
+        bind_values.push(Value::from(tt.as_str()));
     }
 
     // Collect crawl_type as a bind parameter (filters by params JSON field).
@@ -414,7 +415,7 @@ pub async fn list_roots_derived(
     let mut filter = extra_filters;
     let mut next_bind = (bind_values.len() + 1) as u32;
     if has_task_type_filter {
-        filter.push_str(&format!(" AND t.task_type = ${}", next_bind));
+        filter.push_str(&format!(" AND t.task_type::text = ${}", next_bind));
         next_bind += 1;
     }
     if has_crawl_type_filter {
@@ -438,16 +439,16 @@ pub async fn list_roots_derived(
             root_flags AS (
                 SELECT
                     d.root_id,
-                    BOOL_OR(t2.status IN ('pending','queued','running')) AS has_active,
-                    BOOL_OR(t2.status IN ('failed','killed'))            AS has_failed,
-                    BOOL_OR(t2.status = 'done')                          AS has_completed,
-                    BOOL_OR(t2.status = 'killed')                        AS has_killed_terminal
+                    BOOL_OR(t2.status::text IN ('pending','queued','running')) AS has_active,
+                    BOOL_OR(t2.status::text IN ('failed','killed'))            AS has_failed,
+                    BOOL_OR(t2.status::text = 'done')                          AS has_completed,
+                    BOOL_OR(t2.status::text = 'killed')                        AS has_killed_terminal
                 FROM descendants d
                 JOIN tasks t2 ON t2.id = d.descendant_id
                 GROUP BY d.root_id
             )
         SELECT
-            t.id, t.task_type, t.status, t.root_id, t.crawler_id, t.image_id,
+            t.id, t.task_type::text, t.status::text, t.root_id, t.crawler_id, t.image_id,
             t.retry_count, t.created_at, t.updated_at, t.completed_at,
             t.error_message, t.params,
             COALESCE(rf.has_active, false)           AS has_active,
@@ -497,7 +498,7 @@ pub async fn list_roots_derived(
 /// count, which is more efficient for pagination metadata.
 pub async fn count_roots_derived(
     db: &DatabaseConnection,
-    task_type: Option<&str>,
+    task_type: Option<&TaskType>,
     crawl_type: Option<i32>,
     derived_status: Option<&str>,
 ) -> Result<u64, DbErr> {
@@ -507,7 +508,7 @@ pub async fn count_roots_derived(
     // Collect task_type as a bind parameter.
     let has_task_type_filter = task_type.is_some();
     if let Some(tt) = task_type {
-        bind_values.push(Value::from(tt));
+        bind_values.push(Value::from(tt.as_str()));
     }
 
     // Collect crawl_type as a bind parameter (filters by params JSON field).
@@ -569,7 +570,7 @@ pub async fn count_roots_derived(
     let mut filter = extra_filters;
     let mut next_bind = (bind_values.len() + 1) as u32;
     if has_task_type_filter {
-        filter.push_str(&format!(" AND t.task_type = ${}", next_bind));
+        filter.push_str(&format!(" AND t.task_type::text = ${}", next_bind));
         next_bind += 1;
     }
     if has_crawl_type_filter {
@@ -593,10 +594,10 @@ pub async fn count_roots_derived(
             root_flags AS (
                 SELECT
                     d.root_id,
-                    BOOL_OR(t2.status IN ('pending','queued','running')) AS has_active,
-                    BOOL_OR(t2.status IN ('failed','killed'))            AS has_failed,
-                    BOOL_OR(t2.status = 'done')                          AS has_completed,
-                    BOOL_OR(t2.status = 'killed')                        AS has_killed_terminal
+                    BOOL_OR(t2.status::text IN ('pending','queued','running')) AS has_active,
+                    BOOL_OR(t2.status::text IN ('failed','killed'))            AS has_failed,
+                    BOOL_OR(t2.status::text = 'done')                          AS has_completed,
+                    BOOL_OR(t2.status::text = 'killed')                        AS has_killed_terminal
                 FROM descendants d
                 JOIN tasks t2 ON t2.id = d.descendant_id
                 GROUP BY d.root_id

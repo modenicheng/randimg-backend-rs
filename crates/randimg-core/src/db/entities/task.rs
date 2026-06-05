@@ -8,16 +8,7 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// 任务状态常量
-///
-/// 与 Apalis 状态保持兼容，便于平滑迁移
-pub const STATUS_PENDING: &str = "pending";
-pub const STATUS_QUEUED: &str = "queued";
-pub const STATUS_RUNNING: &str = "running";
-pub const STATUS_DONE: &str = "done";
-pub const STATUS_FAILED: &str = "failed";
-pub const STATUS_KILLED: &str = "killed";
-pub const STATUS_DEAD: &str = "dead";
+pub use super::task_enum::{TaskStatus, TaskType};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "tasks")]
@@ -30,10 +21,10 @@ pub struct Model {
     pub fang_task_id: Option<String>,
 
     /// 任务类型：crawl, download, color_extract, upload, accessibility_check, discover, refresh_pixiv_token
-    pub task_type: String,
+    pub task_type: TaskType,
 
     /// 任务状态：pending, queued, running, done, failed, killed
-    pub status: String,
+    pub status: TaskStatus,
 
     /// 父任务 ID，用于任务树结构
     pub parent_id: Option<String>,

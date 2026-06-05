@@ -2,28 +2,26 @@
 ///
 /// 提供 tasks 表的 CRUD 操作，替代 apalis_job 查询模块。
 /// 使用 SeaORM 查询构建器，PostgreSQL 查询。
-use crate::db::entities::task::{
-    self, Entity as Task, STATUS_DEAD, STATUS_DONE, STATUS_FAILED, STATUS_KILLED, STATUS_PENDING,
-    STATUS_QUEUED, STATUS_RUNNING,
-};
+use crate::db::entities::task::{self, Entity as Task};
+use crate::db::entities::task_enum::{TaskStatus, TaskType};
 use chrono::Utc;
 use sea_orm::*;
 
 /// 列出任务（分页，支持状态和类型过滤）
 pub async fn list(
     db: &DatabaseConnection,
-    task_type: Option<&str>,
-    status: Option<Vec<&str>>,
+    task_type: Option<&TaskType>,
+    status: Option<Vec<TaskStatus>>,
     limit: u64,
     offset: u64,
 ) -> Result<Vec<task::Model>, DbErr> {
     let mut query = Task::find().order_by_desc(task::Column::CreatedAt);
     if let Some(tt) = task_type {
-        query = query.filter(task::Column::TaskType.eq(tt));
+        query = query.filter(task::Column::TaskType.eq(tt.clone()));
     }
     if let Some(ref statuses) = status {
         if !statuses.is_empty() {
-            query = query.filter(task::Column::Status.is_in(statuses.iter().copied()));
+            query = query.filter(task::Column::Status.is_in(statuses.iter().cloned()));
         }
     }
     query.limit(limit).offset(offset).all(db).await
@@ -32,16 +30,16 @@ pub async fn list(
 /// 统计任务数量（支持状态和类型过滤）
 pub async fn count(
     db: &DatabaseConnection,
-    task_type: Option<&str>,
-    status: Option<Vec<&str>>,
+    task_type: Option<&TaskType>,
+    status: Option<Vec<TaskStatus>>,
 ) -> Result<u64, DbErr> {
     let mut query = Task::find();
     if let Some(tt) = task_type {
-        query = query.filter(task::Column::TaskType.eq(tt));
+        query = query.filter(task::Column::TaskType.eq(tt.clone()));
     }
     if let Some(ref statuses) = status {
         if !statuses.is_empty() {
-            query = query.filter(task::Column::Status.is_in(statuses.iter().copied()));
+            query = query.filter(task::Column::Status.is_in(statuses.iter().cloned()));
         }
     }
     query.count(db).await
@@ -68,11 +66,11 @@ pub async fn delete_by_id(db: &DatabaseConnection, id: &str) -> Result<bool, DbE
 /// 删除所有待处理任务（pending + queued）
 pub async fn delete_pending(
     db: &DatabaseConnection,
-    task_type: Option<&str>,
+    task_type: Option<&TaskType>,
 ) -> Result<u64, DbErr> {
     delete_by_statuses(
         db,
-        &[task::STATUS_PENDING, task::STATUS_QUEUED],
+        &[TaskStatus::Pending, TaskStatus::Queued],
         task_type,
     )
     .await
@@ -81,17 +79,17 @@ pub async fn delete_pending(
 /// 按状态批量删除任务，返回删除的任务数量。
 pub async fn delete_by_statuses(
     db: &DatabaseConnection,
-    statuses: &[&str],
-    task_type: Option<&str>,
+    statuses: &[TaskStatus],
+    task_type: Option<&TaskType>,
 ) -> Result<u64, DbErr> {
     if statuses.is_empty() {
         return Ok(0);
     }
 
     let mut q = Task::delete_many()
-        .filter(task::Column::Status.is_in(statuses.iter().copied()));
+        .filter(task::Column::Status.is_in(statuses.iter().cloned()));
     if let Some(tt) = task_type {
-        q = q.filter(task::Column::TaskType.eq(tt));
+        q = q.filter(task::Column::TaskType.eq(tt.clone()));
     }
 
     let result = q.exec(db).await?;
@@ -103,7 +101,7 @@ pub async fn delete_by_statuses(
 /// 只删除同时匹配状态列表和 ID 列表的任务。返回删除的任务数量。
 pub async fn delete_by_statuses_and_ids(
     db: &DatabaseConnection,
-    statuses: &[&str],
+    statuses: &[TaskStatus],
     ids: &[String],
 ) -> Result<u64, DbErr> {
     if statuses.is_empty() || ids.is_empty() {
@@ -111,7 +109,7 @@ pub async fn delete_by_statuses_and_ids(
     }
 
     let result = Task::delete_many()
-        .filter(task::Column::Status.is_in(statuses.iter().copied()))
+        .filter(task::Column::Status.is_in(statuses.iter().cloned()))
         .filter(task::Column::Id.is_in(ids.iter().map(|s| s.as_str())))
         .exec(db)
         .await?;
@@ -146,19 +144,15 @@ pub async fn find_crawl_ids_by_type(
 pub async fn update_status(
     db: &DatabaseConnection,
     id: &str,
-    new_status: &str,
+    new_status: TaskStatus,
 ) -> Result<(), DbErr> {
     if let Some(t) = Task::find_by_id(id.to_string()).one(db).await? {
         let mut active: task::ActiveModel = t.into();
-        active.status = Set(new_status.to_string());
+        active.status = Set(new_status.clone());
         active.updated_at = Set(Utc::now().into());
 
         // 终态自动设置完成时间
-        if new_status == STATUS_DONE
-            || new_status == STATUS_FAILED
-            || new_status == STATUS_KILLED
-            || new_status == STATUS_DEAD
-        {
+        if new_status.is_terminal() {
             active.completed_at = Set(Some(Utc::now().into()));
         }
 
@@ -197,7 +191,7 @@ pub async fn increment_retry(db: &DatabaseConnection, id: &str) -> Result<(), Db
 /// 创建新任务
 pub async fn create(
     db: &impl ConnectionTrait,
-    task_type: &str,
+    task_type: TaskType,
     parent_id: Option<&str>,
     root_id: Option<&str>,
     crawler_id: Option<i32>,
@@ -210,8 +204,8 @@ pub async fn create(
     let model = task::ActiveModel {
         id: Set(id),
         fang_task_id: Set(None),
-        task_type: Set(task_type.to_string()),
-        status: Set(task::STATUS_PENDING.to_string()),
+        task_type: Set(task_type),
+        status: Set(TaskStatus::Pending),
         parent_id: Set(parent_id.map(|s| s.to_string())),
         root_id: Set(root_id.map(|s| s.to_string())),
         crawler_id: Set(crawler_id),
@@ -232,7 +226,7 @@ pub async fn create(
 pub async fn create_with_id(
     db: &impl ConnectionTrait,
     id: &str,
-    task_type: &str,
+    task_type: TaskType,
     parent_id: Option<&str>,
     root_id: Option<&str>,
     crawler_id: Option<i32>,
@@ -244,8 +238,8 @@ pub async fn create_with_id(
     let model = task::ActiveModel {
         id: Set(id.to_string()),
         fang_task_id: Set(None),
-        task_type: Set(task_type.to_string()),
-        status: Set(task::STATUS_PENDING.to_string()),
+        task_type: Set(task_type),
+        status: Set(TaskStatus::Pending),
         parent_id: Set(parent_id.map(|s| s.to_string())),
         root_id: Set(root_id.map(|s| s.to_string())),
         crawler_id: Set(crawler_id),
@@ -271,7 +265,7 @@ pub async fn link_fang_task(
     if let Some(t) = Task::find_by_id(task_id.to_string()).one(db).await? {
         let mut active: task::ActiveModel = t.into();
         active.fang_task_id = Set(Some(fang_task_id.to_string()));
-        active.status = Set(task::STATUS_QUEUED.to_string());
+        active.status = Set(TaskStatus::Queued);
         active.updated_at = Set(Utc::now().into());
         active.update(db).await?;
     }
@@ -341,9 +335,9 @@ pub async fn compute_derived_status(
 
     if children.is_empty() {
         return if let Some(root) = Task::find_by_id(root_id.to_string()).one(db).await? {
-            Ok(root.status)
+            Ok(root.status.as_str().to_string())
         } else {
-            Ok(STATUS_PENDING.to_string())
+            Ok(TaskStatus::Pending.as_str().to_string())
         };
     }
 
@@ -353,11 +347,11 @@ pub async fn compute_derived_status(
     let mut failed_count: u64 = 0;
 
     for child in &children {
-        match child.status.as_str() {
-            STATUS_PENDING | STATUS_QUEUED | STATUS_RUNNING => active_count += 1,
-            STATUS_DONE => completed_count += 1,
-            STATUS_FAILED | STATUS_KILLED => failed_count += 1,
-            _ => {}
+        match &child.status {
+            TaskStatus::Pending | TaskStatus::Queued | TaskStatus::Running => active_count += 1,
+            TaskStatus::Done => completed_count += 1,
+            TaskStatus::Failed | TaskStatus::Killed => failed_count += 1,
+            TaskStatus::Dead => {}
         }
     }
 
@@ -386,7 +380,7 @@ pub async fn compute_derived_status(
 /// - 新实现：1 次查询，通过 LEFT JOIN 聚合子任务状态计数，在 Rust 中计算派生状态
 pub async fn list_roots(
     db: &DatabaseConnection,
-    task_type: Option<&str>,
+    task_type: Option<&TaskType>,
     limit: u64,
     offset: u64,
 ) -> Result<Vec<RootTaskWithStatus>, DbErr> {
@@ -396,8 +390,8 @@ pub async fn list_roots(
 
     let mut type_filter = String::new();
     if let Some(tt) = task_type {
-        bind_values.push(Value::from(tt));
-        type_filter = " AND r.task_type = $3".to_string();
+        bind_values.push(Value::from(tt.as_str()));
+        type_filter = " AND r.task_type::text = $3".to_string();
     }
 
     let sql = format!(
@@ -407,10 +401,10 @@ pub async fn list_roots(
             r.params, r.error_message, r.retry_count,
             r.created_at, r.updated_at, r.completed_at,
             COUNT(c.id)                                                      AS children_count,
-            COUNT(CASE WHEN c.status IN ('pending','queued','running') THEN 1 END) AS active_count,
-            COUNT(CASE WHEN c.status = 'done'              THEN 1 END) AS done_count,
-            COUNT(CASE WHEN c.status IN ('failed','killed') THEN 1 END) AS failed_count,
-            COUNT(CASE WHEN c.status = 'killed'             THEN 1 END) AS killed_count
+            COUNT(CASE WHEN c.status::text IN ('pending','queued','running') THEN 1 END) AS active_count,
+            COUNT(CASE WHEN c.status::text = 'done'              THEN 1 END) AS done_count,
+            COUNT(CASE WHEN c.status::text IN ('failed','killed') THEN 1 END) AS failed_count,
+            COUNT(CASE WHEN c.status::text = 'killed'             THEN 1 END) AS killed_count
         FROM (
             SELECT * FROM tasks
             WHERE parent_id IS NULL{type_filter}
@@ -496,7 +490,7 @@ pub async fn list_roots(
 pub async fn create_with_parent(
     db: &DatabaseConnection,
     parent_id: &str,
-    task_type: &str,
+    task_type: TaskType,
     crawler_id: Option<i32>,
     image_id: Option<i32>,
     params: Option<&str>,
@@ -516,8 +510,8 @@ pub async fn create_with_parent(
     let model = task::ActiveModel {
         id: Set(id),
         fang_task_id: Set(None),
-        task_type: Set(task_type.to_string()),
-        status: Set(STATUS_PENDING.to_string()),
+        task_type: Set(task_type),
+        status: Set(TaskStatus::Pending),
         parent_id: Set(Some(parent_id.to_string())),
         root_id: Set(Some(effective_root_id)),
         crawler_id: Set(crawler_id),
@@ -634,7 +628,7 @@ pub async fn get_task_metrics(db: &DatabaseConnection) -> Result<TaskMetrics, Db
 
 pub async fn delete_by_statuses_and_older_than(
     db: &DatabaseConnection,
-    statuses: &[&str],
+    statuses: &[TaskStatus],
     older_than_hours: i64,
 ) -> Result<u64, DbErr> {
     if statuses.is_empty() || older_than_hours <= 0 {
@@ -644,7 +638,7 @@ pub async fn delete_by_statuses_and_older_than(
     let cutoff = Utc::now() - chrono::Duration::hours(older_than_hours);
 
     let result = Task::delete_many()
-        .filter(task::Column::Status.is_in(statuses.iter().copied()))
+        .filter(task::Column::Status.is_in(statuses.iter().cloned()))
         .filter(task::Column::CompletedAt.is_not_null())
         .filter(task::Column::CompletedAt.lt(cutoff))
         .exec(db)

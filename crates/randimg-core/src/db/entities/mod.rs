@@ -8,3 +8,4 @@ pub mod image_tag_association;
 pub mod pixiv_credential;
 pub mod tag;
 pub mod task;
+pub mod task_enum;

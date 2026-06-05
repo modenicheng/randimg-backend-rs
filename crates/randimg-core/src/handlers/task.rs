@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::WorkerState;
 use crate::auth::middleware::AuthUser;
 use crate::db::entities::task;
+use crate::db::entities::task_enum::{TaskStatus, TaskType};
 use crate::db::query;
 use crate::db::query::task_tree::ChildJobNode;
 use crate::error::AppError;
@@ -19,19 +20,21 @@ use uuid::Uuid;
 /// Valid cleanup flag values.
 const CLEAN_COMPLETED: &str = "completed";
 
-/// Map short task type names (from frontend) to full Rust type paths stored in DB.
-fn map_task_type(short: &str) -> &str {
+/// Parse frontend short task type name to `TaskType` enum.
+fn parse_task_type(short: &str) -> Option<TaskType> {
     match short {
-        "crawl" => "randimg_core::task_queue::jobs::CrawlJob",
-        "download" => "randimg_core::task_queue::jobs::DownloadJob",
-        "color-extract" | "color_extract" => "randimg_core::task_queue::jobs::ColorExtractJob",
-        "upload" => "randimg_core::task_queue::jobs::UploadJob",
-        "accessibility-check" | "accessibility_check" => "randimg_core::task_queue::jobs::AccessibilityCheckJob",
-        "discover" => "randimg_core::task_queue::jobs::DiscoverJob",
-        "refresh-pixiv-token" | "refresh_pixiv_token" => "randimg_core::task_queue::jobs::RefreshPixivTokenJob",
-        other => other, // pass through if already a full path
+        "crawl" => Some(TaskType::Crawl),
+        "download" => Some(TaskType::Download),
+        "color-extract" | "color_extract" => Some(TaskType::ColorExtract),
+        "upload" => Some(TaskType::Upload),
+        "accessibility-check" | "accessibility_check" => Some(TaskType::AccessibilityCheck),
+        "discover" => Some(TaskType::Discover),
+        "refresh-pixiv-token" | "refresh_pixiv_token" => Some(TaskType::RefreshPixivToken),
+        "cleanup" => Some(TaskType::Cleanup),
+        _ => short.parse::<TaskType>().ok(),
     }
 }
+
 const CLEAN_FAILED: &str = "failed";
 const CLEAN_CANCELLED: &str = "cancelled";
 const CLEAN_KILLED: &str = "killed";
@@ -115,25 +118,25 @@ async fn clean_tasks(
         }
     }
 
-    let mut statuses: Vec<&str> = Vec::new();
+    let mut statuses: Vec<TaskStatus> = Vec::new();
     for f in &flags {
         match *f {
-            CLEAN_COMPLETED => statuses.push(task::STATUS_DONE),
-            CLEAN_FAILED => statuses.push(task::STATUS_FAILED),
-            CLEAN_CANCELLED => statuses.push(task::STATUS_KILLED),
-            CLEAN_KILLED => statuses.push(task::STATUS_KILLED),
+            CLEAN_COMPLETED => statuses.push(TaskStatus::Done),
+            CLEAN_FAILED => statuses.push(TaskStatus::Failed),
+            CLEAN_CANCELLED => statuses.push(TaskStatus::Killed),
+            CLEAN_KILLED => statuses.push(TaskStatus::Killed),
             CLEAN_PENDING => {
-                statuses.push(task::STATUS_PENDING);
-                statuses.push(task::STATUS_QUEUED);
+                statuses.push(TaskStatus::Pending);
+                statuses.push(TaskStatus::Queued);
             }
-            CLEAN_RUNNING => statuses.push(task::STATUS_RUNNING),
+            CLEAN_RUNNING => statuses.push(TaskStatus::Running),
             CLEAN_ALL => {
-                statuses.push(task::STATUS_DONE);
-                statuses.push(task::STATUS_FAILED);
-                statuses.push(task::STATUS_KILLED);
-                statuses.push(task::STATUS_PENDING);
-                statuses.push(task::STATUS_QUEUED);
-                statuses.push(task::STATUS_RUNNING);
+                statuses.push(TaskStatus::Done);
+                statuses.push(TaskStatus::Failed);
+                statuses.push(TaskStatus::Killed);
+                statuses.push(TaskStatus::Pending);
+                statuses.push(TaskStatus::Queued);
+                statuses.push(TaskStatus::Running);
             }
             _ => unreachable!("flag already validated"),
         }
@@ -141,14 +144,12 @@ async fn clean_tasks(
     statuses.sort();
     statuses.dedup();
 
-    let mapped_type = body.task_type.as_deref().map(map_task_type);
+    let parsed_type = body.task_type.as_deref().and_then(parse_task_type);
     let deleted = if let Some(ct) = body.crawl_type {
         // Find crawl task IDs matching the crawl_type by filtering params JSON.
-        // query::task::find_crawl_ids_by_type returns crawler_id values (i32),
-        // not task IDs — so we list crawl tasks and filter by params in Rust.
         let crawl_tasks = query::task::list(
             &state.db,
-            Some(map_task_type("crawl")),
+            Some(&TaskType::Crawl),
             None,
             10_000,
             0,
@@ -179,7 +180,7 @@ async fn clean_tasks(
         query::task::delete_by_statuses(
             &state.db,
             &statuses,
-            mapped_type,
+            parsed_type.as_ref(),
         )
         .await?
     };
@@ -225,32 +226,31 @@ pub struct ListTasksQuery {
 }
 
 // ---------------------------------------------------------------------------
-// Status mapping (task entity text ↔ API lowercase)
+// Status mapping (task entity enum ↔ API lowercase)
 // ---------------------------------------------------------------------------
 
-/// Map task entity status string to API status string.
-fn map_status(status: &str) -> &'static str {
-    let lower = status.to_lowercase();
-    match lower.as_str() {
-        task::STATUS_PENDING => "pending",
-        task::STATUS_QUEUED => "pending",
-        task::STATUS_RUNNING => "running",
-        task::STATUS_DONE => "completed",
-        task::STATUS_FAILED => "failed",
-        task::STATUS_KILLED => "killed",
-        _ => "unknown",
+/// Map task entity status enum to API status string.
+fn map_status(status: &TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Pending => "pending",
+        TaskStatus::Queued => "pending",
+        TaskStatus::Running => "running",
+        TaskStatus::Done => "completed",
+        TaskStatus::Failed => "failed",
+        TaskStatus::Killed => "killed",
+        TaskStatus::Dead => "dead",
     }
 }
 
-/// Map API status filter to task entity status string(s).
-fn unmap_status(status: &str) -> Vec<&'static str> {
+/// Map API status filter to task entity status enum(s).
+fn unmap_status(status: &str) -> Vec<TaskStatus> {
     match status {
-        "pending" | "queued" => vec![task::STATUS_PENDING, task::STATUS_QUEUED],
-        "running" => vec![task::STATUS_RUNNING],
-        "completed" => vec![task::STATUS_DONE],
-        "failed" => vec![task::STATUS_FAILED],
-        "killed" => vec![task::STATUS_KILLED],
-        _ => vec![task::STATUS_PENDING, task::STATUS_QUEUED],
+        "pending" | "queued" => vec![TaskStatus::Pending, TaskStatus::Queued],
+        "running" => vec![TaskStatus::Running],
+        "completed" => vec![TaskStatus::Done],
+        "failed" => vec![TaskStatus::Failed],
+        "killed" => vec![TaskStatus::Killed],
+        _ => vec![TaskStatus::Pending, TaskStatus::Queued],
     }
 }
 
@@ -268,7 +268,7 @@ fn row_to_json(t: &task::Model) -> serde_json::Value {
 
     serde_json::json!({
         "id": t.id,
-        "task_type": t.task_type,
+        "task_type": t.task_type.as_str(),
         "status": map_status(&t.status),
         "retry_count": t.retry_count,
         "created_at": created_at,
@@ -322,11 +322,11 @@ pub async fn list_tasks(
 
     let db = &state.db;
     let mapped_status = q.status.as_deref().map(unmap_status);
-    let mapped_type = q.task_type.as_deref().map(map_task_type);
+    let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
 
     let (rows, total) = tokio::try_join!(
-        query::task::list(db, mapped_type, mapped_status.clone(), limit, offset),
-        query::task::count(db, mapped_type, mapped_status),
+        query::task::list(db, parsed_type.as_ref(), mapped_status.clone(), limit, offset),
+        query::task::count(db, parsed_type.as_ref(), mapped_status),
     )
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -437,8 +437,8 @@ pub async fn delete_pending_tasks(
     _auth: AuthUser,
     Query(q): Query<DeletePendingQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let mapped_type = q.task_type.as_deref().map(map_task_type);
-    let deleted = query::task::delete_pending(&state.db, mapped_type)
+    let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
+    let deleted = query::task::delete_pending(&state.db, parsed_type.as_ref())
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -498,14 +498,14 @@ pub async fn list_roots(
     let limit = q.limit.unwrap_or(50).min(200);
     let offset = q.offset.unwrap_or(0);
     let db = &state.db;
-    let mapped_type = q.task_type.as_deref().map(map_task_type);
+    let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
 
     // Filtering by derived status and pagination are pushed into the SQL CTE.
     // Run list + count in parallel.
     let (rows, total) = tokio::try_join!(
         query::task_tree::list_roots_derived(
             db,
-            mapped_type,
+            parsed_type.as_ref(),
             q.crawl_type,
             q.status.as_deref(),
             limit,
@@ -513,7 +513,7 @@ pub async fn list_roots(
         ),
         query::task_tree::count_roots_derived(
             db,
-            mapped_type,
+            parsed_type.as_ref(),
             q.crawl_type,
             q.status.as_deref(),
         ),
@@ -544,7 +544,8 @@ pub async fn list_roots(
             //    status wins. Only when the root has reached `completed` do
             //    we consider the descendant rollup. A root with no descendants
             //    naturally falls through to `completed`.
-            let root_mapped = map_status(&r.status);
+            // For raw SQL results, status is already a String.
+            let root_mapped = map_status_str(&r.status);
             let has_descendants = r.has_active || r.has_failed || r.has_completed;
             let subtree_dead_terminal = !r.has_active
                 && r.has_failed
@@ -568,7 +569,7 @@ pub async fn list_roots(
                 "id": r.id,
                 "task_type": r.task_type,
                 "status": effective,
-                "raw_status": map_status(&r.status),
+                "raw_status": root_mapped,
                 "root_id": r.root_id,
                 "crawler_id": r.crawler_id,
                 "image_id": r.image_id,
@@ -586,6 +587,20 @@ pub async fn list_roots(
         "tasks": items,
         "total": total,
     })))
+}
+
+/// Map a raw SQL status string to an API status string (for `RootWithDerivedStatus`).
+fn map_status_str(status: &str) -> &'static str {
+    match status {
+        "pending" => "pending",
+        "queued" => "pending",
+        "running" => "running",
+        "done" => "completed",
+        "failed" => "failed",
+        "killed" => "killed",
+        "dead" => "dead",
+        _ => "unknown",
+    }
 }
 
 // ── GET /tasks/{id}/tree ────────────────────────────────────────────────────
@@ -766,24 +781,24 @@ pub async fn get_subtasks(
     Path(task_id): Path<String>,
     Query(q): Query<RootsOrSubtasksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let mapped_status: Option<Vec<&str>> = q.status.as_deref().map(|s| match s {
-        "pending"   => vec![task::STATUS_PENDING, task::STATUS_QUEUED],
-        "running"   => vec![task::STATUS_RUNNING],
-        "completed" => vec![task::STATUS_DONE],
-        "failed"    => vec![task::STATUS_FAILED],
-        "killed"    => vec![task::STATUS_KILLED],
-        other       => vec![other],
+    let mapped_status: Option<Vec<TaskStatus>> = q.status.as_deref().map(|s| match s {
+        "pending"   => vec![TaskStatus::Pending, TaskStatus::Queued],
+        "running"   => vec![TaskStatus::Running],
+        "completed" => vec![TaskStatus::Done],
+        "failed"    => vec![TaskStatus::Failed],
+        "killed"    => vec![TaskStatus::Killed],
+        _           => vec![TaskStatus::Pending, TaskStatus::Queued],
     });
 
     let limit = q.limit.map(|l| l as u64);
     let offset = q.offset.map(|o| o as u64);
 
-    let mapped_type = q.task_type.as_deref().map(map_task_type);
+    let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
 
     let total = query::task_tree::count_subtasks(
         &state.db,
         &task_id,
-        mapped_type,
+        parsed_type.as_ref(),
         mapped_status.as_deref(),
     )
     .await
@@ -792,7 +807,7 @@ pub async fn get_subtasks(
     let children = query::task_tree::list_subtasks(
         &state.db,
         &task_id,
-        mapped_type,
+        parsed_type.as_ref(),
         mapped_status.as_deref(),
         limit,
         offset,
@@ -845,9 +860,9 @@ pub async fn interrupt_subtasks(
     Path(task_id): Path<String>,
     Query(q): Query<InterruptSubtasksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let mapped_type = q.task_type.as_deref().map(map_task_type);
+    let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
     let (cancelled_ids, fang_task_ids, _) =
-        query::task_tree::interrupt_subtasks(&state.db, &task_id, mapped_type)
+        query::task_tree::interrupt_subtasks(&state.db, &task_id, parsed_type.as_ref())
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 

@@ -26,7 +26,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Convert columns — drop DEFAULT first (TEXT default can't auto-cast to ENUM),
+        // Convert columns
         // change type, then re-set DEFAULT with explicit ENUM cast.
         manager
             .get_connection()
