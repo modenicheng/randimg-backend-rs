@@ -12,7 +12,7 @@ pub async fn insert_dead_letter(
     db: &DatabaseConnection,
     task_id: &str,
     task_type: &str,
-    params: Option<&str>,
+    params: Option<serde_json::Value>,
     error_message: &str,
     retry_count: i32,
     failure_history: Option<serde_json::Value>,
@@ -24,7 +24,7 @@ pub async fn insert_dead_letter(
         id: Set(id),
         task_id: Set(task_id.to_string()),
         task_type: Set(task_type.to_string()),
-        params: Set(params.map(|s| s.to_string())),
+        params: Set(params.map(|v| v.to_string())),
         error_message: Set(error_message.to_string()),
         retry_count: Set(retry_count),
         failure_history: Set(Some(
@@ -75,6 +75,8 @@ pub async fn requeue_dead_letter(
     // Create a new task from the dead letter data
     let task_type: crate::db::entities::task_enum::TaskType = dl.task_type.parse()
         .map_err(|e: String| DbErr::Custom(format!("Invalid task type '{}': {}", dl.task_type, e)))?;
+    let params_json = dl.params.as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
     let new_task = super::task::create(
         db,
         task_type,
@@ -82,7 +84,7 @@ pub async fn requeue_dead_letter(
         None,  // root_id
         None,  // crawler_id
         None,  // image_id
-        dl.params.as_deref(),
+        params_json,
     )
     .await?;
 

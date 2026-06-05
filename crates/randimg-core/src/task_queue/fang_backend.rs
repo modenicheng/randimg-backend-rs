@@ -172,7 +172,7 @@ impl QueueBackend {
                 root_id,
                 crawler_id,
                 image_id,
-                Some(&metadata.to_string()),
+                Some(metadata.clone()),
             )
             .await
             .map_err(|e| format!("创建任务记录失败: {}", e))?
@@ -184,7 +184,7 @@ impl QueueBackend {
                 root_id,
                 crawler_id,
                 image_id,
-                Some(&metadata.to_string()),
+                Some(metadata.clone()),
             )
             .await
             .map_err(|e| format!("创建任务记录失败: {}", e))?

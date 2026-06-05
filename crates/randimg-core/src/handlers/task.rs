@@ -162,7 +162,6 @@ async fn clean_tasks(
             .filter(|t| {
                 t.params
                     .as_ref()
-                    .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
                     .and_then(|v| v.get("crawl_type").and_then(|c| c.as_i64()))
                     .map(|v| v == ct as i64)
                     .unwrap_or(false)
@@ -262,10 +261,6 @@ fn row_to_json(t: &task::Model) -> serde_json::Value {
     let created_at = t.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let completed_at = t.completed_at.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
-    // Parse the params JSON string to extract the payload.
-    let payload = t.params.as_ref()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
-
     serde_json::json!({
         "id": t.id,
         "task_type": t.task_type.as_str(),
@@ -274,7 +269,7 @@ fn row_to_json(t: &task::Model) -> serde_json::Value {
         "created_at": created_at,
         "completed_at": completed_at,
         "error_message": t.error_message,
-        "payload": payload,
+        "payload": t.params,
     })
 }
 
@@ -523,8 +518,6 @@ pub async fn list_roots(
     let items: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let payload = r.params.as_ref()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
             let derived = query::task_tree::derived_status_from_flags(
                 r.has_active,
                 r.has_failed,
@@ -578,7 +571,7 @@ pub async fn list_roots(
                 "updated_at": updated_at,
                 "completed_at": completed_at,
                 "error_message": r.error_message,
-                "payload": payload,
+                "payload": r.params,
             })
         })
         .collect();

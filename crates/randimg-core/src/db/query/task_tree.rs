@@ -50,7 +50,7 @@ pub struct RootWithDerivedStatus {
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error_message: Option<String>,
-    pub params: Option<String>,
+    pub params: Option<serde_json::Value>,
     pub has_active: bool,
     pub has_failed: bool,
     pub has_completed: bool,
@@ -118,8 +118,6 @@ pub fn status_label(status: &TaskStatus) -> &'static str {
 
 /// Convert a `task::Model` into a JSON value suitable for API responses.
 pub fn model_to_json(m: &task::Model) -> JsonValue {
-    let params: Option<JsonValue> = m.params.as_ref().and_then(|p| serde_json::from_str(p).ok());
-
     let created_at = m.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let completed_at = m.completed_at.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
@@ -132,7 +130,7 @@ pub fn model_to_json(m: &task::Model) -> JsonValue {
         "createdAt":    created_at,
         "completedAt":  completed_at,
         "errorMessage": m.error_message,
-        "params":       params,
+        "params":       m.params,
     })
 }
 
@@ -481,7 +479,7 @@ pub async fn list_roots_derived(
             updated_at: row.try_get_by_index(8)?,
             completed_at: row.try_get_by_index(9)?,
             error_message: row.try_get_by_index(10)?,
-            params: row.try_get_by_index(11)?,
+            params: row.try_get_by_index::<Option<serde_json::Value>>(11)?,
             has_active: row.try_get_by_index::<bool>(12)?,
             has_failed: row.try_get_by_index::<bool>(13)?,
             has_completed: row.try_get_by_index::<bool>(14)?,

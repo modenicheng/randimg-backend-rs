@@ -39,7 +39,7 @@ pub struct Model {
     pub image_id: Option<i32>,
 
     /// 任务参数（JSON 格式）
-    pub params: Option<String>,
+    pub params: Option<serde_json::Value>,
 
     /// 错误信息
     pub error_message: Option<String>,

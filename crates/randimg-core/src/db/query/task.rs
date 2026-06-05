@@ -196,7 +196,7 @@ pub async fn create(
     root_id: Option<&str>,
     crawler_id: Option<i32>,
     image_id: Option<i32>,
-    params: Option<&str>,
+    params: Option<serde_json::Value>,
 ) -> Result<task::Model, DbErr> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
@@ -210,7 +210,7 @@ pub async fn create(
         root_id: Set(root_id.map(|s| s.to_string())),
         crawler_id: Set(crawler_id),
         image_id: Set(image_id),
-        params: Set(params.map(|s| s.to_string())),
+        params: Set(params),
         error_message: Set(None),
         retry_count: Set(0),
         priority: Set(0),
@@ -231,7 +231,7 @@ pub async fn create_with_id(
     root_id: Option<&str>,
     crawler_id: Option<i32>,
     image_id: Option<i32>,
-    params: Option<&str>,
+    params: Option<serde_json::Value>,
 ) -> Result<task::Model, DbErr> {
     let now = Utc::now();
 
@@ -244,7 +244,7 @@ pub async fn create_with_id(
         root_id: Set(root_id.map(|s| s.to_string())),
         crawler_id: Set(crawler_id),
         image_id: Set(image_id),
-        params: Set(params.map(|s| s.to_string())),
+        params: Set(params),
         error_message: Set(None),
         retry_count: Set(0),
         priority: Set(0),
@@ -493,7 +493,7 @@ pub async fn create_with_parent(
     task_type: TaskType,
     crawler_id: Option<i32>,
     image_id: Option<i32>,
-    params: Option<&str>,
+    params: Option<serde_json::Value>,
 ) -> Result<task::Model, DbErr> {
     let parent = Task::find_by_id(parent_id.to_string())
         .one(db)
@@ -516,7 +516,7 @@ pub async fn create_with_parent(
         root_id: Set(Some(effective_root_id)),
         crawler_id: Set(crawler_id),
         image_id: Set(image_id),
-        params: Set(params.map(|s| s.to_string())),
+        params: Set(params),
         error_message: Set(None),
         retry_count: Set(0),
         priority: Set(0),

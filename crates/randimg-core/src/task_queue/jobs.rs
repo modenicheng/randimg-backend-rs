@@ -75,7 +75,7 @@ async fn maybe_move_to_dead_letter(
         &state.db,
         task_id,
         task_type,
-        task.params.as_deref(),
+        task.params.clone(),
         error_message,
         task.retry_count,
         Some(json!(history)),
