@@ -4,6 +4,7 @@ use axum::http::HeaderValue;
 use randimg_core::config::{AppConfig, BindAddr};
 use randimg_core::{WorkerState, db, db::query, db_backend, handlers};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
@@ -95,8 +96,15 @@ async fn main() {
             db,
             config: config.clone(),
             oss,
-            queue_backend,
+            queue_backend: queue_backend.clone(),
             http_client,
+            shutdown_token: tokio_util::sync::CancellationToken::new(),
+            worker_start_time: std::time::Instant::now(),
+            active_tasks: Arc::new(AtomicUsize::new(0)),
+            discover_cache: Arc::new(dashmap::DashMap::new()),
+            fingerprint_cache: queue_backend.fingerprint_cache.clone(),
+            last_activity: Arc::new(dashmap::DashMap::new()),
+            stuck_pools: Arc::new(dashmap::DashMap::new()),
         },
     });
 

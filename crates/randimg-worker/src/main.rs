@@ -10,9 +10,14 @@
 //! cargo run -p randimg-worker
 //! ```
 
+use axum::Router;
+use axum::routing::get;
 use randimg_core::config::AppConfig;
+use randimg_core::handlers;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -67,13 +72,24 @@ async fn main() {
         .expect("Failed to initialize Fang job queue");
     tracing::info!("Fang job queue initialized");
 
-    // 8. Construct WorkerState
+    // 8. Create shutdown token
+    let shutdown_token = CancellationToken::new();
+
+    // 9. Construct WorkerState
+    let drain_timeout = config.drain_timeout_secs;
     let state = Arc::new(randimg_core::WorkerState {
         db,
         config: config.clone(),
         oss,
-        queue_backend,
+        queue_backend: queue_backend.clone(),
         http_client,
+        shutdown_token: shutdown_token.clone(),
+        worker_start_time: std::time::Instant::now(),
+        active_tasks: Arc::new(AtomicUsize::new(0)),
+        discover_cache: Arc::new(dashmap::DashMap::new()),
+        fingerprint_cache: queue_backend.fingerprint_cache.clone(),
+        last_activity: Arc::new(dashmap::DashMap::new()),
+        stuck_pools: Arc::new(dashmap::DashMap::new()),
     });
 
     let handles = randimg_core::spawn_workers(
@@ -88,14 +104,92 @@ async fn main() {
         "All workers spawned"
     );
 
-    shutdown_signal().await;
-    tracing::info!("Shutdown signal received, aborting workers...");
+    // 10. Spawn watchdog
+    let watchdog_handle = randimg_core::watchdog::spawn_watchdog(
+        state.clone(),
+        shutdown_token.clone(),
+    );
+    tracing::info!("Watchdog spawned");
 
-    let handles = worker_handles.lock().await;
-    for handle in handles.iter() {
-        handle.abort();
+    // 11. Spawn health check HTTP server
+    let health_port = config.worker_health_port;
+    let health_state = state.clone();
+    tokio::spawn(async move {
+        let app = Router::new()
+            .route("/health", get(handlers::health::worker_health_handler))
+            .route("/metrics", get(handlers::health::metrics_handler))
+            .with_state(health_state);
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], health_port));
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        tracing::info!(port = health_port, "Health check server started");
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // 11. Wait for shutdown signal
+    shutdown_signal().await;
+    tracing::info!("Shutdown signal received, draining tasks...");
+
+    // 11. Signal all workers to stop accepting new work
+    shutdown_token.cancel();
+
+    // 12. Drain: wait up to drain_timeout for running tasks to finish
+    let drain_deadline = tokio::time::sleep(std::time::Duration::from_secs(drain_timeout));
+    tokio::pin!(drain_deadline);
+
+    let mut all_done = false;
+    tokio::select! {
+        _ = async {
+            // Poll until all handles have finished
+            loop {
+                let handles = worker_handles.lock().await;
+                let pending = handles.iter().filter(|h| !h.is_finished()).count();
+                if pending == 0 {
+                    all_done = true;
+                    break;
+                }
+                drop(handles);
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        } => {}
+        _ = &mut drain_deadline => {
+            tracing::warn!(
+                timeout_secs = drain_timeout,
+                "Drain timeout reached, aborting remaining tasks"
+            );
+        }
     }
-    tracing::info!(count = handles.len(), "All workers aborted, exiting");
+
+    // 13. Abort any still-running worker handles and watchdog
+    let handles = worker_handles.lock().await;
+    let worker_count = handles.len();
+    let mut aborted = 0u32;
+    for handle in handles.iter() {
+        if !handle.is_finished() {
+            handle.abort();
+            aborted += 1;
+        }
+    }
+    drop(handles);
+
+    if !watchdog_handle.is_finished() {
+        watchdog_handle.abort();
+        aborted += 1;
+    }
+
+    if all_done {
+        tracing::info!(
+            count = worker_count,
+            "All workers finished gracefully"
+        );
+    } else {
+        tracing::warn!(
+            total = worker_count,
+            aborted,
+            "Workers aborted after drain timeout"
+        );
+    }
+
+    tracing::info!("Worker shutdown complete");
 }
 
 /// Initialize tracing with env filter, compact format on stdout, and JSON file output.

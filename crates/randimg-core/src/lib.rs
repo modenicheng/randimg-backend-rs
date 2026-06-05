@@ -11,11 +11,16 @@ pub mod error;
 pub mod handlers;
 pub mod pixiv;
 pub mod task_queue;
+pub mod watchdog;
 
 use config::AppConfig;
+use dashmap::DashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::AtomicUsize;
+use std::time::{Duration, Instant};
 use task_queue::fang_backend::QueueBackend;
+use task_queue::fingerprint::FingerprintCache;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct WorkerState {
@@ -24,6 +29,13 @@ pub struct WorkerState {
     pub oss: dogecloud::DogeCloudOss,
     pub queue_backend: QueueBackend,
     pub http_client: reqwest::Client,
+    pub shutdown_token: CancellationToken,
+    pub worker_start_time: Instant,
+    pub active_tasks: Arc<AtomicUsize>,
+    pub discover_cache: Arc<DashMap<String, Instant>>,
+    pub fingerprint_cache: Arc<FingerprintCache>,
+    pub last_activity: Arc<DashMap<String, Instant>>,
+    pub stuck_pools: Arc<DashMap<String, Instant>>,
 }
 
 /// Spawn fang workers for all job types. Returns handles for graceful shutdown.
@@ -63,6 +75,7 @@ pub async fn spawn_workers(
         ("accessibility_check", state.config.task_concurrency_accessibility_check),
         ("discover", state.config.task_concurrency_discover),
         ("refresh_pixiv_token", state.config.task_concurrency_refresh_pixiv_token),
+        ("cleanup", state.config.task_concurrency_cleanup),
     ];
 
     for &(task_type, concurrency) in pool_configs {
