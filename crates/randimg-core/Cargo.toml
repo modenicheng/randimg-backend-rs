@@ -27,6 +27,7 @@ tower-http = { workspace = true, optional = true }
 
 # Async runtime
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 
 # Database
 sea-orm = { workspace = true }
@@ -80,6 +81,7 @@ hex = { workspace = true }
 serde_urlencoded = { workspace = true }
 anyhow = { workspace = true }
 mime_guess = { workspace = true }
+dashmap = { workspace = true }
 
 [[example]]
 name = "color_extract_demo"
@@ -97,6 +99,7 @@ path = "examples/remove_placeholder_images.rs"
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 sea-orm = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 http-body-util = { workspace = true }
