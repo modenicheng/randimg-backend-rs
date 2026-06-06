@@ -7,6 +7,17 @@ use crate::db::entities::{
 use sea_orm::*;
 use sea_orm::sea_query::Expr;
 
+/// Default max squared Euclidean distance in LAB space for color filtering.
+/// ΔE ≈ 50 — wide enough for semantic color search.
+pub const DEFAULT_MAX_DIST: f64 = 2500.0;
+
+/// Parsed color filter parameters from API query.
+pub struct ColorFilterParams {
+    pub lab: [f64; 3],
+    pub mode: String,
+    pub max_dist: f64,
+}
+
 /// Filter out soft-deleted images from a query.
 fn exclude_deleted(query: Select<Image>) -> Select<Image> {
     query.filter(image::Column::DeletedAt.is_null())

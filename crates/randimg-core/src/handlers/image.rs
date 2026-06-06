@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::WorkerState;
 use crate::auth::middleware::{AuthUser, OptionalAuthUser};
 use crate::db::query::image;
+use crate::db::query::image::ColorFilterParams;
 use crate::error::AppError;
 
 pub fn routes() -> Router<Arc<WorkerState>> {
@@ -121,6 +122,39 @@ async fn format_image_response(
     }
 }
 
+/// Parse color filter params from query, converting RGB to LAB if needed.
+/// Returns `ColorFilterParams` or `None` if no valid color input.
+fn parse_color_params(
+    r: Option<u8>,
+    g: Option<u8>,
+    b: Option<u8>,
+    l: Option<f64>,
+    a: Option<f64>,
+    b_lab: Option<f64>,
+    mode: Option<String>,
+    max_dist: Option<f64>,
+) -> Option<ColorFilterParams> {
+    use crate::db::query::image::DEFAULT_MAX_DIST;
+
+    let lab = if let (Some(r), Some(g), Some(b)) = (r, g, b) {
+        let lab = crate::color::rgb_to_lab(r, g, b);
+        [lab[0] as f64, lab[1] as f64, lab[2] as f64]
+    } else if let (Some(l), Some(a), Some(b_lab)) = (l, a, b_lab) {
+        [l, a, b_lab]
+    } else {
+        return None;
+    };
+
+    let mode = mode.unwrap_or_else(|| "primary".to_string());
+    if mode != "primary" && mode != "palette" {
+        return None;
+    }
+
+    let max_dist = max_dist.unwrap_or(DEFAULT_MAX_DIST);
+
+    Some(ColorFilterParams { lab, mode, max_dist })
+}
+
 /// GET /  Random image
 pub async fn random_image(
     State(state): State<Arc<WorkerState>>,
@@ -133,6 +167,12 @@ pub async fn random_image(
     let height_floor = query.height_floor.unwrap_or(0);
     let height_ceil = query.height_ceil.unwrap_or(i32::MAX);
 
+    let color_params = parse_color_params(
+        query.r, query.g, query.b,
+        query.l, query.a, query.b_lab,
+        query.mode, query.max_dist,
+    );
+
     let img = image::random_image(
         &state.db,
         ratio_floor,
@@ -143,6 +183,7 @@ pub async fn random_image(
         height_ceil,
         query.author.as_deref(),
         query.tags.as_deref(),
+        color_params,
         &state.config,
     )
     .await
