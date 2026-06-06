@@ -82,6 +82,7 @@ serde_urlencoded = { workspace = true }
 anyhow = { workspace = true }
 mime_guess = { workspace = true }
 dashmap = { workspace = true }
+rand = "0.8"
 
 [[example]]
 name = "color_extract_demo"

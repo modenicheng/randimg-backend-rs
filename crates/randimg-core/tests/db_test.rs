@@ -633,7 +633,7 @@ async fn test_image_list_images() {
 
     let results = randimg_core::db::query::image::list_images(
         &db, 0, 10, true, "id", 0.0, 10.0, 0, i32::MAX, 0, i32::MAX,
-        None, None, None, false, &config,
+        None, None, None, None, false, &config,
     )
     .await
     .unwrap();
@@ -642,7 +642,7 @@ async fn test_image_list_images() {
     // Paginated
     let page = randimg_core::db::query::image::list_images(
         &db, 0, 2, true, "id", 0.0, 10.0, 0, i32::MAX, 0, i32::MAX,
-        None, None, None, false, &config,
+        None, None, None, None, false, &config,
     )
     .await
     .unwrap();
@@ -671,7 +671,7 @@ async fn test_image_list_images_sorted_by_width() {
 
     let results = randimg_core::db::query::image::list_images(
         &db, 0, 10, false, "width", 0.0, 10.0, 0, i32::MAX, 0, i32::MAX,
-        None, None, None, false, &config,
+        None, None, None, None, false, &config,
     )
     .await
     .unwrap();
@@ -697,7 +697,7 @@ async fn test_image_list_images_by_author_filter() {
     // Filter by author name
     let results = randimg_core::db::query::image::list_images(
         &db, 0, 10, true, "id", 0.0, 10.0, 0, i32::MAX, 0, i32::MAX,
-        Some("Alice"), None, None, false, &config,
+        Some("Alice"), None, None, None, false, &config,
     )
     .await
     .unwrap();
@@ -837,7 +837,7 @@ async fn test_image_list_with_tag_filter() {
 
     let results = randimg_core::db::query::image::list_images(
         &db, 0, 10, true, "id", 0.0, 10.0, 0, i32::MAX, 0, i32::MAX,
-        None, None, Some("nature"), false, &config,
+        None, None, Some("nature"), None, false, &config,
     )
     .await
     .unwrap();
@@ -859,7 +859,7 @@ async fn test_soft_deleted_image_excluded_from_list() {
     // Verify it appears
     let results = randimg_core::db::query::image::list_images(
         &db, 0, 10, true, "id", 0.0, 10.0, 0, i32::MAX, 0, i32::MAX,
-        None, None, None, false, &config,
+        None, None, None, None, false, &config,
     ).await.unwrap();
     assert_eq!(results.len(), 1);
 
@@ -875,7 +875,7 @@ async fn test_soft_deleted_image_excluded_from_list() {
     // Should be excluded
     let results = randimg_core::db::query::image::list_images(
         &db, 0, 10, true, "id", 0.0, 10.0, 0, i32::MAX, 0, i32::MAX,
-        None, None, None, false, &config,
+        None, None, None, None, false, &config,
     ).await.unwrap();
     assert_eq!(results.len(), 0);
 }

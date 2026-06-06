@@ -18,6 +18,11 @@ pub struct ColorFilterParams {
     pub max_dist: f64,
 }
 
+/// Compute squared Euclidean distance between two LAB colors.
+fn lab_sq_dist(l1: f64, a1: f64, b1: f64, l2: f64, a2: f64, b2: f64) -> f64 {
+    (l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)
+}
+
 /// Filter out soft-deleted images from a query.
 fn exclude_deleted(query: Select<Image>) -> Select<Image> {
     query.filter(image::Column::DeletedAt.is_null())
@@ -150,7 +155,7 @@ pub async fn find_by_id(
     })))
 }
 
-/// Get random accessible image
+/// Get random accessible image, optionally filtered by color
 pub async fn random_image(
     db: &DatabaseConnection,
     ratio_floor: f32,
@@ -161,6 +166,7 @@ pub async fn random_image(
     height_ceil: i32,
     author_filter: Option<&str>,
     tags: Option<&str>,
+    color_params: Option<ColorFilterParams>,
     config: &AppConfig,
 ) -> Result<Option<serde_json::Value>, DbErr> {
     let mut query = exclude_deleted(Image::find())
@@ -216,7 +222,98 @@ pub async fn random_image(
             .distinct();
     }
 
-    // Use database-level random selection (RANDOM() works on both SQLite and PostgreSQL)
+    // Color filter: primary mode bounding box pre-filter
+    if let Some(ref cp) = color_params {
+        if cp.mode == "primary" {
+            let radius = cp.max_dist.sqrt();
+            query = query
+                .filter(image::Column::PrimaryL.is_not_null())
+                .filter(image::Column::PrimaryL.between(cp.lab[0] - radius, cp.lab[0] + radius))
+                .filter(image::Column::PrimaryA.between(cp.lab[1] - radius, cp.lab[1] + radius))
+                .filter(image::Column::PrimaryB.between(cp.lab[2] - radius, cp.lab[2] + radius));
+        }
+    }
+
+    // Apply color post-filtering (for both primary and palette modes)
+    if let Some(ref cp) = color_params {
+        if cp.mode == "primary" {
+            // Primary mode: bounding box filtered some rows, exact-filter the rest
+            let results = query.all(db).await?;
+            let filtered: Vec<image::Model> = results
+                .into_iter()
+                .filter(|img| {
+                    let l = img.primary_l.unwrap_or(0.0);
+                    let a = img.primary_a.unwrap_or(0.0);
+                    let b = img.primary_b.unwrap_or(0.0);
+                    lab_sq_dist(l, a, b, cp.lab[0], cp.lab[1], cp.lab[2]) <= cp.max_dist
+                })
+                .collect();
+
+            if filtered.is_empty() {
+                return Ok(None);
+            }
+
+            // Random pick from filtered candidates
+            use rand::seq::SliceRandom;
+            let img = filtered.choose(&mut rand::thread_rng()).cloned();
+            let Some(img) = img else {
+                return Ok(None);
+            };
+            return find_by_id(db, img.id, false, config).await;
+        } else {
+            // Palette mode: query image_color_palette for matching colors
+            use crate::db::entities::image_color_palette::{self, Entity as PaletteEntity};
+
+            // First, get the image IDs matching other filters from the existing query
+            let candidate_images = query.all(db).await?;
+            let candidate_ids: Vec<i32> = candidate_images.iter().map(|i| i.id).collect();
+
+            if candidate_ids.is_empty() {
+                return Ok(None);
+            }
+
+            let radius = cp.max_dist.sqrt();
+            let palette_rows = PaletteEntity::find()
+                .filter(image_color_palette::Column::ImageId.is_in(candidate_ids))
+                .filter(image_color_palette::Column::LabL.between(cp.lab[0] - radius, cp.lab[0] + radius))
+                .filter(image_color_palette::Column::LabA.between(cp.lab[1] - radius, cp.lab[1] + radius))
+                .filter(image_color_palette::Column::LabB.between(cp.lab[2] - radius, cp.lab[2] + radius))
+                .all(db)
+                .await?;
+
+            // Group by image_id, keep min distance
+            let mut best_by_image: std::collections::HashMap<i32, f64> =
+                std::collections::HashMap::new();
+            for p in &palette_rows {
+                let dist = lab_sq_dist(
+                    p.lab_l, p.lab_a, p.lab_b,
+                    cp.lab[0], cp.lab[1], cp.lab[2],
+                );
+                if dist <= cp.max_dist {
+                    let entry = best_by_image.entry(p.image_id).or_insert(dist);
+                    if dist < *entry {
+                        *entry = dist;
+                    }
+                }
+            }
+
+            if best_by_image.is_empty() {
+                return Ok(None);
+            }
+
+            // Random pick from palette-matched images
+            let matched_ids: Vec<i32> = best_by_image.keys().cloned().collect();
+            use rand::seq::SliceRandom;
+            let picked_id = matched_ids.choose(&mut rand::thread_rng()).copied();
+
+            let Some(picked_id) = picked_id else {
+                return Ok(None);
+            };
+            return find_by_id(db, picked_id, false, config).await;
+        }
+    }
+
+    // No color filter — original random selection behavior
     let img = query.order_by_asc(Expr::cust("RANDOM()")).one(db).await?;
 
     let Some(img) = img else {
@@ -242,6 +339,7 @@ pub async fn list_images(
     author_filter: Option<&str>,
     accessible: Option<bool>,
     tags: Option<&str>,
+    _color_params: Option<ColorFilterParams>,
     is_admin: bool,
     config: &AppConfig,
 ) -> Result<Vec<serde_json::Value>, DbErr> {
