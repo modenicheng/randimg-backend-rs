@@ -92,6 +92,16 @@ async fn main() {
         stuck_pools: Arc::new(dashmap::DashMap::new()),
     });
 
+    // 10. Reset stale running tasks from previous crash
+    {
+        let stale_timeout = config.task_default_timeout_secs * 2;
+        match randimg_core::db::query::task::reset_stale_running_tasks(&state.db, stale_timeout).await {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!(count = n, stale_timeout_secs = stale_timeout, "Reset stale running tasks from previous run"),
+            Err(e) => tracing::error!(error = %e, "Failed to reset stale running tasks"),
+        }
+    }
+
     let handles = randimg_core::spawn_workers(
         state.clone(),
         tokio::runtime::Handle::current(),

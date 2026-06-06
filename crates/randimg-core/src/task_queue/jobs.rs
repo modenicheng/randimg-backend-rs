@@ -131,6 +131,9 @@ macro_rules! impl_async_runnable {
                                     if let Err(update_err) = query::task::update_error(&state.db, task_id, &e.to_string()).await {
                                         tracing::error!(task_id, error = %update_err, "Failed to update task error message");
                                     }
+                                    if let Err(update_err) = query::task::increment_retry(&state.db, task_id).await {
+                                        tracing::error!(task_id, error = %update_err, "Failed to increment retry count");
+                                    }
                                     maybe_move_to_dead_letter(state, task_id, self.max_retries, &e.to_string(), $task_type).await;
                                 }
                             }
@@ -154,6 +157,9 @@ macro_rules! impl_async_runnable {
                             }
                             if let Err(e) = query::task::update_error(&state.db, task_id, &timeout_msg).await {
                                 tracing::error!(task_id, error = %e, "Failed to update task error message");
+                            }
+                            if let Err(e) = query::task::increment_retry(&state.db, task_id).await {
+                                tracing::error!(task_id, error = %e, "Failed to increment retry count");
                             }
                             maybe_move_to_dead_letter(state, task_id, self.max_retries, &timeout_msg, $task_type).await;
                         }

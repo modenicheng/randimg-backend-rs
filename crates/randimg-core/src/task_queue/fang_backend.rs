@@ -209,9 +209,15 @@ impl QueueBackend {
             .map_err(|e| format!("关联 fang 任务失败: {}", e))?;
 
         // 4. 提交事务 — 任务创建 + fang 关联一起持久化
-        txn.commit()
-            .await
-            .map_err(|e| format!("提交事务失败: {}", e))?;
+        //    失败时尝试清理孤儿 Fang 任务（best-effort，跨数据库无法保证原子性）
+        if let Err(e) = txn.commit().await {
+            self.fingerprint_cache.remove(task_type, &params_str);
+            let fang_id = fang_task.id;
+            if let Err(rm_err) = self.queue.remove_task(&fang_id).await {
+                tracing::warn!(fang_task_id = %fang_id, error = %rm_err, "Failed to clean up orphan Fang task after commit failure");
+            }
+            return Err(format!("提交事务失败: {}", e));
+        }
 
         tracing::info!(task_id = %task_record.id, "Task queued successfully (transaction committed)");
         Ok(task_record.id)

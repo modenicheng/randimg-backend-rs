@@ -11,7 +11,11 @@ pub async fn handle_cleanup(_job: CleanupJob, state: &Arc<WorkerState>) -> Resul
 
     let deleted_tasks = query::task::delete_by_statuses_and_older_than(
         &state.db,
-        &[crate::db::entities::task_enum::TaskStatus::Done, crate::db::entities::task_enum::TaskStatus::Failed],
+        &[
+            crate::db::entities::task_enum::TaskStatus::Done,
+            crate::db::entities::task_enum::TaskStatus::Failed,
+            crate::db::entities::task_enum::TaskStatus::Dead,
+        ],
         task_ttl,
     )
     .await

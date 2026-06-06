@@ -421,3 +421,41 @@ pub async fn delete_by_statuses_and_older_than(
 
     Ok(result.rows_affected)
 }
+
+pub async fn reset_stale_running_tasks(
+    db: &DatabaseConnection,
+    stale_timeout_secs: u64,
+) -> Result<u64, DbErr> {
+    if stale_timeout_secs == 0 {
+        return Ok(0);
+    }
+
+    let cutoff = Utc::now() - chrono::Duration::seconds(stale_timeout_secs as i64);
+
+    let stale = Task::find()
+        .filter(task::Column::Status.eq(TaskStatus::Running))
+        .filter(task::Column::UpdatedAt.lt(cutoff))
+        .all(db)
+        .await?;
+
+    if stale.is_empty() {
+        return Ok(0);
+    }
+
+    let count = stale.len() as u64;
+    let error_msg = format!(
+        "Worker restart: task was running for >{}s and may have been interrupted",
+        stale_timeout_secs
+    );
+
+    for t in stale {
+        let mut active: task::ActiveModel = t.into();
+        active.status = Set(TaskStatus::Failed);
+        active.error_message = Set(Some(error_msg.clone()));
+        active.completed_at = Set(Some(Utc::now().into()));
+        active.updated_at = Set(Utc::now().into());
+        active.update(db).await?;
+    }
+
+    Ok(count)
+}

@@ -44,7 +44,9 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
                 Ok(dims) => dims,
                 Err(e) => {
                     tracing::error!(image_id = job.image_id, "Image file corrupt/invalid: {}", e);
-                    let _ = tokio::fs::remove_file(&file_path).await;
+                    if let Err(rm_err) = tokio::fs::remove_file(&file_path).await {
+                        tracing::warn!(path = %file_path, error = %rm_err, "Failed to remove corrupt file");
+                    }
                     return Err(e.into());
                 }
             };
@@ -84,8 +86,6 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
     }
 
     // 3. Perform the actual download using crate's built-in downloader.
-    //    DownloadManager auto-configures headers (Referer) and handles file I/O.
-    //    Retries are managed by Apalis (RetryPolicy), not the downloader.
     {
         use std::path::Path;
         let img_path = Path::new(&job.image_path);
@@ -95,7 +95,6 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
             .and_then(|n| n.to_str())
             .ok_or_else(|| format!("Invalid image_path: {}", job.image_path))?;
 
-        // The crate only creates the base output_dir; ensure subdirectories exist.
         let output_dir = if parent.as_os_str().is_empty() {
             Path::new(&state.config.image_dir).to_path_buf()
         } else {
@@ -122,54 +121,56 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
         tracing::warn!(image_id = job.image_id, "Failed to mark as downloaded: {}", e);
     }
 
-    // ┌─────────────────────────────────────────────────────────────────────┐
-    // │ 校验下载文件：读取实际像素尺寸并回写数据库                            │
-    // │                                                                     │
-    // │ 为什么：save_illust() 因 Pixiv API 不返回各页独立尺寸，只能写入 0。  │
-    // │ 此处在下载完成后解码图片，获取真实宽高并 UPDATE 数据库。              │
-    // │                                                                     │
-    // │ 错误处理：若文件损坏无法解码，删除文件并返回错误，触发 Apalis 重试。  │
-    // └─────────────────────────────────────────────────────────────────────┘
-    {
-        use crate::db::entities::image::{self, Entity as Image};
-        let fp = file_path.clone();
-        let image_id = job.image_id;
-
-        let dimensions = match tokio::task::spawn_blocking(move || {
-            let img = ::image::open(&fp)
-                .map_err(|e| format!("Failed to open/validate image: {}", e))?;
-            let (w, h) = (img.width() as i32, img.height() as i32);
-            Ok::<_, String>((w, h))
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking panicked: {}", e))?
-        {
-            Ok(dims) => dims,
-            Err(e) => {
-                tracing::error!(image_id = job.image_id, "Image file corrupt/invalid: {}", e);
-                let _ = tokio::fs::remove_file(&file_path).await;
-                return Err(e.into());
-            }
-        };
-
-        let (w, h) = dimensions;
-        let ar = if h > 0 { w as f32 / h as f32 } else { 0.0 };
-
-        if let Some(img_model) = Image::find_by_id(image_id)
-            .one(&state.db)
-            .await
-            .map_err(|e| e.to_string())?
-        {
-            let mut active: image::ActiveModel = img_model.into();
-            active.width = Set(w);
-            active.height = Set(h);
-            active.aspect_ratio = Set(ar);
-            active.update(&state.db).await.map_err(|e| e.to_string())?;
-        }
-    }
+    validate_and_update_dimensions(&state.db, &file_path, job.image_id).await?;
 
     // 5. Spawn downstream pipeline tasks
     spawn_downstream_children(&job, &current_id, &**state).await?;
+
+    Ok(())
+}
+
+async fn validate_and_update_dimensions(
+    db: &sea_orm::DatabaseConnection,
+    file_path: &str,
+    image_id: i32,
+) -> Result<(), String> {
+    use crate::db::entities::image::{self, Entity as Image};
+    let fp = file_path.to_string();
+    let fp_clone = fp.clone();
+    let id = image_id;
+
+    let dimensions = tokio::task::spawn_blocking(move || {
+        let img = ::image::open(&fp)
+            .map_err(|e| format!("Failed to open/validate image: {}", e))?;
+        let (w, h) = (img.width() as i32, img.height() as i32);
+        Ok::<_, String>((w, h))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking panicked: {}", e))?
+    .map_err(|e| {
+        let fp = fp_clone;
+        tokio::task::spawn(async move {
+            if let Err(rm_err) = tokio::fs::remove_file(&fp).await {
+                tracing::warn!(path = %fp, error = %rm_err, "Failed to remove corrupt file");
+            }
+        });
+        e
+    })?;
+
+    let (w, h) = dimensions;
+    let ar = if h > 0 { w as f32 / h as f32 } else { 0.0 };
+
+    if let Some(img_model) = Image::find_by_id(id)
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        let mut active: image::ActiveModel = img_model.into();
+        active.width = Set(w);
+        active.height = Set(h);
+        active.aspect_ratio = Set(ar);
+        active.update(db).await.map_err(|e| e.to_string())?;
+    }
 
     Ok(())
 }

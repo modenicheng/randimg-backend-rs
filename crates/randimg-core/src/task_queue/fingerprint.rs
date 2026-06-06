@@ -5,6 +5,7 @@
 //! found within the TTL window, the task is considered a duplicate.
 
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
@@ -44,14 +45,24 @@ impl FingerprintCache {
     pub fn check_and_insert(&self, task_type: &str, params: &str) -> bool {
         let fingerprint = hash_task(task_type, params);
 
-        if let Some(entry) = self.cache.get(&fingerprint) {
-            if entry.value().elapsed() < self.ttl {
-                return false; // duplicate within TTL
+        match self.cache.entry(fingerprint) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().elapsed() < self.ttl {
+                    return false;
+                }
+                entry.insert(Instant::now());
+                true
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(Instant::now());
+                true
             }
         }
+    }
 
-        self.cache.insert(fingerprint, Instant::now());
-        true // new task (or expired entry replaced)
+    pub fn remove(&self, task_type: &str, params: &str) {
+        let fingerprint = hash_task(task_type, params);
+        self.cache.remove(&fingerprint);
     }
 
     /// Get the number of entries currently in the cache (including expired).

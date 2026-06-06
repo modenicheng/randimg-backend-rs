@@ -93,14 +93,18 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
 
         for illust in &data.illusts {
             let illust_id = illust.id;
-            // Dedup: skip if recently processed
-            if let Some(entry) = state.discover_cache.get(&illust_id.to_string()) {
-                if entry.elapsed() < Duration::from_secs(3600) {
-                    tracing::debug!(illust_id, "Skipping duplicate discover");
-                    continue;
+            match state.discover_cache.entry(illust_id.to_string()) {
+                dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                    if entry.get().elapsed() < Duration::from_secs(3600) {
+                        tracing::debug!(illust_id, "Skipping duplicate discover");
+                        continue;
+                    }
+                    entry.insert(std::time::Instant::now());
+                }
+                dashmap::mapref::entry::Entry::Vacant(entry) => {
+                    entry.insert(std::time::Instant::now());
                 }
             }
-            state.discover_cache.insert(illust_id.to_string(), std::time::Instant::now());
 
             let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {

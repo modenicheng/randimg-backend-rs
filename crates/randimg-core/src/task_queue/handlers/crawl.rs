@@ -58,7 +58,9 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
                 .await
                 .unwrap_or(0) as i32;
 
-            let _ = query::crawler::mark_completed(&state.db, crawler_id, total).await;
+            if let Err(e) = query::crawler::mark_completed(&state.db, crawler_id, total).await {
+                tracing::warn!(crawler_id, error = %e, "Failed to mark crawler as completed");
+            }
 
             // Trigger autonomous discover for next-hop crawling (unless disabled)
             if job.disable_discover.unwrap_or(false) {
@@ -90,7 +92,9 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
             } // end discover check
         }
         Err(_) => {
-            let _ = query::crawler::mark_failed(&state.db, crawler_id).await;
+            if let Err(e) = query::crawler::mark_failed(&state.db, crawler_id).await {
+                tracing::warn!(crawler_id, error = %e, "Failed to mark crawler as failed");
+            }
         }
     }
 

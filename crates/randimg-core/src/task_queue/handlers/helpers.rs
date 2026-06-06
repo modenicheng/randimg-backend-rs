@@ -132,7 +132,9 @@ pub(super) async fn save_illust(
                 active.total_view = sea_orm::Set(new_view);
                 active.total_bookmarks = sea_orm::Set(new_bookmarks);
                 active.total_comments = sea_orm::Set(new_comments);
-                let _ = active.update(db).await;
+                if let Err(e) = active.update(db).await {
+                    tracing::warn!(image_path = %image_path, error = %e, "Failed to update engagement metrics");
+                }
             }
             continue;
         }
@@ -270,7 +272,8 @@ pub(super) async fn spawn_downstream_children(
         max_retries: 0,  // CPU-bound, no retry
         backoff_base: state.config.task_backoff_base,
     };
-    let color_metadata = serde_json::to_value(&color_job).unwrap();
+    let color_metadata = serde_json::to_value(&color_job)
+        .map_err(|e| format!("Failed to serialize color_extract job: {}", e))?;
 
     let upload_task_id = uuid::Uuid::new_v4().to_string();
     let upload_job = UploadJob {
@@ -281,7 +284,8 @@ pub(super) async fn spawn_downstream_children(
         max_retries: state.config.task_max_retries,
         backoff_base: state.config.task_backoff_base,
     };
-    let upload_metadata = serde_json::to_value(&upload_job).unwrap();
+    let upload_metadata = serde_json::to_value(&upload_job)
+        .map_err(|e| format!("Failed to serialize upload job: {}", e))?;
 
     let a11y_task_id = uuid::Uuid::new_v4().to_string();
     let a11y_job = AccessibilityCheckJob {
@@ -292,7 +296,8 @@ pub(super) async fn spawn_downstream_children(
         max_retries: state.config.task_max_retries,
         backoff_base: state.config.task_backoff_base,
     };
-    let a11y_metadata = serde_json::to_value(&a11y_job).unwrap();
+    let a11y_metadata = serde_json::to_value(&a11y_job)
+        .map_err(|e| format!("Failed to serialize accessibility_check job: {}", e))?;
 
     let color_fut = state.queue_backend.push_task(
         &color_job, "color_extract", color_metadata, &state.db, Some(current_id), Some(upstream_id), None, Some(job.image_id), Some(&color_task_id),
