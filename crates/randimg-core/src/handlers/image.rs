@@ -41,6 +41,15 @@ pub struct RandomQuery {
     pub height_ceil: Option<i32>,
     pub author: Option<String>,
     pub tags: Option<String>,
+    // Color filter
+    pub r: Option<u8>,
+    pub g: Option<u8>,
+    pub b: Option<u8>,
+    pub l: Option<f64>,
+    pub a: Option<f64>,
+    pub b_lab: Option<f64>,
+    pub mode: Option<String>,
+    pub max_dist: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +67,15 @@ pub struct ListQuery {
     pub author: Option<String>,
     pub accessible: Option<String>,
     pub tags: Option<String>,
+    // Color filter
+    pub r: Option<u8>,
+    pub g: Option<u8>,
+    pub b: Option<u8>,
+    pub l: Option<f64>,
+    pub a: Option<f64>,
+    pub b_lab: Option<f64>,
+    pub mode: Option<String>,
+    pub max_dist: Option<f64>,
 }
 
 /// Serve a local image file from disk (with path traversal protection)
