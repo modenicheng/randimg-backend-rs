@@ -339,7 +339,7 @@ pub async fn list_images(
     author_filter: Option<&str>,
     accessible: Option<bool>,
     tags: Option<&str>,
-    _color_params: Option<ColorFilterParams>,
+    color_params: Option<ColorFilterParams>,
     is_admin: bool,
     config: &AppConfig,
 ) -> Result<Vec<serde_json::Value>, DbErr> {
@@ -400,10 +400,23 @@ pub async fn list_images(
             .distinct();
     }
 
-    // Popularity sort is handled at application level; others use DB ordering
-    let is_popularity = sort_by == "popularity";
+    // Color filter: primary mode bounding box pre-filter
+    if let Some(ref cp) = color_params {
+        if cp.mode == "primary" {
+            let radius = cp.max_dist.sqrt();
+            query = query
+                .filter(image::Column::PrimaryL.is_not_null())
+                .filter(image::Column::PrimaryL.between(cp.lab[0] - radius, cp.lab[0] + radius))
+                .filter(image::Column::PrimaryA.between(cp.lab[1] - radius, cp.lab[1] + radius))
+                .filter(image::Column::PrimaryB.between(cp.lab[2] - radius, cp.lab[2] + radius));
+        }
+    }
 
-    if !is_popularity {
+    // Popularity sort is handled at application level; distance sort too
+    let is_popularity = sort_by == "popularity";
+    let is_distance_sort = sort_by == "distance" && color_params.is_some();
+
+    if !is_popularity && !is_distance_sort {
         let sort_column = match sort_by {
             "width" => image::Column::Width,
             "height" => image::Column::Height,
@@ -422,12 +435,86 @@ pub async fn list_images(
 
     let results = query.all(db).await?;
 
-    // For popularity sort: compute scores in Rust, sort, then paginate
-    let results: Vec<_> = if is_popularity {
-        let mut scored: Vec<(f64, image::Model, Option<author::Model>)> = results
+    // Color post-filter + distance computation
+    let results: Vec<_> = if let Some(ref cp) = color_params {
+        if cp.mode == "primary" {
+            // Primary mode: filter by exact distance, attach distance score
+            results
+                .into_iter()
+                .filter_map(|(img, auth)| {
+                    let l = img.primary_l?;
+                    let a = img.primary_a.unwrap_or(0.0);
+                    let b = img.primary_b.unwrap_or(0.0);
+                    let dist = lab_sq_dist(l, a, b, cp.lab[0], cp.lab[1], cp.lab[2]);
+                    if dist <= cp.max_dist {
+                        Some(((img, auth), dist))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            // Palette mode: match via image_color_palette table
+            let candidate_ids: Vec<i32> = results.iter().map(|(img, _)| img.id).collect();
+
+            if candidate_ids.is_empty() {
+                Vec::new()
+            } else {
+                let radius = cp.max_dist.sqrt();
+                let palette_rows = image_color_palette::Entity::find()
+                    .filter(image_color_palette::Column::ImageId.is_in(candidate_ids))
+                    .filter(image_color_palette::Column::LabL.between(cp.lab[0] - radius, cp.lab[0] + radius))
+                    .filter(image_color_palette::Column::LabA.between(cp.lab[1] - radius, cp.lab[1] + radius))
+                    .filter(image_color_palette::Column::LabB.between(cp.lab[2] - radius, cp.lab[2] + radius))
+                    .all(db)
+                    .await?;
+
+                // Group by image_id, keep min distance
+                let mut best_by_image: std::collections::HashMap<i32, f64> =
+                    std::collections::HashMap::new();
+                for p in &palette_rows {
+                    let dist = lab_sq_dist(
+                        p.lab_l, p.lab_a, p.lab_b,
+                        cp.lab[0], cp.lab[1], cp.lab[2],
+                    );
+                    if dist <= cp.max_dist {
+                        let entry = best_by_image.entry(p.image_id).or_insert(dist);
+                        if dist < *entry {
+                            *entry = dist;
+                        }
+                    }
+                }
+
+                results
+                    .into_iter()
+                    .filter_map(|(img, auth)| {
+                        best_by_image.get(&img.id).map(|&dist| ((img, auth), dist))
+                    })
+                    .collect()
+            }
+        }
+    } else {
+        // No color filter — no distance score
+        results.into_iter().map(|r| (r, 0.0f64)).collect()
+    };
+
+    // For popularity / distance sort: compute scores, sort, paginate
+    let results: Vec<_> = if is_popularity || is_distance_sort {
+        let mut scored: Vec<(f64, (image::Model, Option<author::Model>))> = results
             .into_iter()
-            .map(|(img, auth)| (popularity_score(&img), img, auth))
+            .map(|((img, auth), color_dist)| {
+                let score = if is_popularity {
+                    popularity_score(&img)
+                } else {
+                    // Distance sort: lower is better, so negate for descending
+                    -color_dist
+                };
+                (score, (img, auth))
+            })
             .collect();
+
+        // Both popularity and distance: higher score = better
+        // For distance, score is negated, so descending = closest first
         if desc {
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         } else {
@@ -437,10 +524,16 @@ pub async fn list_images(
             .into_iter()
             .skip(offset as usize)
             .take(limit as usize)
-            .map(|(_, img, auth)| (img, auth))
+            .map(|(_, pair)| pair)
             .collect()
     } else {
+        // Color-filtered but not distance-sorted: drop the distance score
         results
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .map(|((img, auth), _)| (img, auth))
+            .collect()
     };
 
     // Batch fetch tags for all images (avoid N+1)
