@@ -256,6 +256,7 @@ pub async fn list_images(
         "source_created_at",
         "created_at",
         "popularity",
+        "distance",
     ];
     if !allowed_sorts.contains(&sort_by) {
         return Err(AppError::BadRequest(format!(
@@ -264,6 +265,12 @@ pub async fn list_images(
             allowed_sorts.join(", ")
         )));
     }
+
+    let color_params = parse_color_params(
+        query.r, query.g, query.b,
+        query.l, query.a, query.b_lab,
+        query.mode, query.max_dist,
+    );
 
     let result = image::list_images(
         &state.db,
@@ -280,6 +287,7 @@ pub async fn list_images(
         query.author.as_deref(),
         accessible,
         query.tags.as_deref(),
+        color_params,
         is_admin,
         &state.config,
     )
