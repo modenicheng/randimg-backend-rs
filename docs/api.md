@@ -1,6 +1,6 @@
 # Randimg API Reference
 
-Base URL: `http://localhost:8765` (configurable via `SERVER_ADDR` env var)
+Base URL: `http://localhost:8000` (configurable via `SERVER_ADDR` env var)
 
 All timestamps are in UTC+8 (Asia/Shanghai) format: `YYYY-MM-DD HH:MM:SS`.
 
@@ -14,7 +14,7 @@ Admin endpoints require a JWT token in the `Authorization` header:
 Authorization: Bearer <token>
 ```
 
-### Obtain a token
+### Obtain a Token
 
 ```
 POST /token
@@ -41,23 +41,45 @@ Returns `401` on invalid credentials.
 GET /health
 ```
 
-Response: `200 OK`
+Response:
+
+```json
+{ "status": "ok" }
+```
 
 ### Random Image
 
 ```
-GET /?format=json&ratio=landscape&width=800&tags=nature
+GET /
 ```
 
-| Param    | Type   | Description |
-|----------|--------|-------------|
-| `format` | string | `json` (default) or `redirect` |
-| `local`  | bool   | Return local file path instead of CDN URL |
-| `ratio`  | string | `landscape`, `portrait`, `square` |
-| `width`  | int    | Minimum width filter |
-| `height` | int    | Minimum height filter |
-| `author` | string | Filter by author name |
-| `tags`   | string | Comma-separated tag filter |
+Returns a single random image. When color filter params are provided, the image is randomly selected from all matches; when omitted, any accessible image may be returned.
+
+| Param          | Type   | Default | Description |
+|----------------|--------|---------|-------------|
+| `format`       | string | `json`  | Response format: `json` (object), `image` (302 redirect to CDN) |
+| `local`        | bool   | `false` | Serve local file directly instead of CDN URL |
+| `ratio_floor`  | float  | `0`     | Minimum aspect ratio (width / height) |
+| `ratio_ceil`   | float  | `10`    | Maximum aspect ratio |
+| `width_floor`  | int    | `0`     | Minimum width in pixels |
+| `width_ceil`   | int    | MAX     | Maximum width in pixels |
+| `height_floor` | int    | `0`     | Minimum height in pixels |
+| `height_ceil`  | int    | MAX     | Maximum height in pixels |
+| `author`       | string | —       | Filter by author name (case-insensitive) |
+| `tags`         | string | —       | Comma-separated tag names |
+| `rgb`          | string | —       | Target color as `r,g,b` (e.g. `255,0,0`). Mutually exclusive with `lab`. |
+| `lab`          | string | —       | Target color as `l,a,b` in CIELAB space (e.g. `50,0,0`). Mutually exclusive with `rgb`. |
+| `mode`         | string | `primary` | Color match mode: `primary` (dominant color) or `palette` (color palette) |
+| `max_dist`     | float  | `2500`  | Maximum squared LAB distance (ΔE² ≈ 50). Higher = looser match. |
+
+**Color filter details:**
+
+- `rgb` and `lab` are mutually exclusive — providing both is silently ignored.
+- `rgb` values are converted to CIELAB internally. Range: 0–255 per channel.
+- `lab` values are used directly. L ≈ 0–100, a ≈ -128–127, b ≈ -128–127.
+- `mode=primary` compares against the image's dominant color. Faster, fewer results.
+- `mode=palette` compares against the image's 10-color palette. Slower, more results.
+- `max_dist` is the squared Euclidean distance. Default 2500 ≈ ΔE 50. Lower = more precise match.
 
 ### Image Detail
 
@@ -65,46 +87,65 @@ GET /?format=json&ratio=landscape&width=800&tags=nature
 GET /image/{id}
 ```
 
+Returns full metadata for a single image, including author, tags, and color palette.
+
+| Param    | Type   | Default | Description |
+|----------|--------|---------|-------------|
+| `format` | string | `json`  | Response format: `json` (object), `image` (302 redirect) |
+| `local`  | bool   | `false` | Serve local file directly |
+
 ### Paginated Image List
 
 ```
-GET /list?offset=0&limit=40&accessible=true&desc=true&tags=nature&author=pixiv_user
+GET /list
 ```
 
-| Param        | Type   | Default | Description |
-|--------------|--------|---------|-------------|
-| `offset`     | int    | 0       | Pagination offset |
-| `limit`      | int    | 30      | Page size (max 300) |
-| `desc`       | bool   | true    | Sort descending |
-| `sort_by`    | string | `id`    | Sort field: `id`, `width`, `height`, `aspect_ratio`, `source_created_at`, `created_at`, `popularity` |
-| `ratio_floor`| float  | 0       | Minimum aspect ratio |
-| `ratio_ceil` | float  | 10      | Maximum aspect ratio |
-| `author`     | string | —       | Filter by author name |
-| `tags`       | string | —       | Comma-separated tag filter |
-| `accessible` | string | —       | **See note below** |
+Returns a paginated list of images with optional filtering and sorting.
+
+| Param          | Type   | Default | Description |
+|----------------|--------|---------|-------------|
+| `offset`       | int    | `0`     | Pagination offset (max 100,000) |
+| `limit`        | int    | `30`    | Page size (max 300) |
+| `desc`         | bool   | `true`  | Sort descending |
+| `sort_by`      | string | `id`    | Sort field: `id`, `width`, `height`, `aspect_ratio`, `source_created_at`, `created_at`, `popularity`, `distance` |
+| `ratio_floor`  | float  | `0`     | Minimum aspect ratio |
+| `ratio_ceil`   | float  | `10`    | Maximum aspect ratio |
+| `width_floor`  | int    | `0`     | Minimum width |
+| `width_ceil`   | int    | MAX     | Maximum width |
+| `height_floor` | int    | `0`     | Minimum height |
+| `height_ceil`  | int    | MAX     | Maximum height |
+| `author`       | string | —       | Filter by author name |
+| `tags`         | string | —       | Comma-separated tag filter |
+| `accessible`   | string | —       | **Admin only.** See note below. |
+| `rgb`          | string | —       | Target color as `r,g,b`. Mutually exclusive with `lab`. |
+| `lab`          | string | —       | Target color as `l,a,b`. Mutually exclusive with `rgb`. |
+| `mode`         | string | `primary` | Color match mode: `primary` or `palette` |
+| `max_dist`     | float  | `2500`  | Maximum squared LAB distance |
+
+**`sort_by=distance`**: Only meaningful when color filter params are provided. Results are sorted by color distance (closest first). Combined with `max_dist` for filtering.
 
 **`accessible` field semantics:**
 
-- `accessible` is a boolean field on the `image` table controlling **non-admin user visibility**.
-- **Non-admin users**: The API always filters `accessible != false`. Images with `accessible = false` are excluded. Non-admin users never see inaccessible images regardless of the query parameter.
-- **Admin users** (authenticated with valid token): All images are returned by default (no accessible filter applied). The `accessible` query parameter allows admin to narrow results:
-  - `?accessible=true` — only images where `accessible = true`
-  - `?accessible=false` — only images where `accessible = false`
-  - Parameter omitted or unrecognized value — all images (no filter)
-- In summary: `accessible` controls **non-admin visibility**, not admin visibility. Admin sees everything by default.
+- Non-admin users: always filtered to `accessible != false`. The query parameter is ignored.
+- Admin users (authenticated): no filter by default. `?accessible=true` shows only accessible images; `?accessible=false` shows only inaccessible images.
 
 ### Color Search
 
 ```
-GET /color/search?hex=FF5733&mode=lab&max_dist=30&limit=20
+GET /color/search
 ```
+
+Dedicated endpoint for color-based image search. Returns results sorted by color distance.
 
 | Param      | Type   | Default | Description |
 |------------|--------|---------|-------------|
-| `hex`      | string | —       | Target color as 6-digit hex (without `#`) |
-| `mode`     | string | `lab`   | `lab` (CIELAB Euclidean) or `rgb` (Euclidean in sRGB) |
-| `max_dist` | float  | 30      | Maximum color distance (lower = stricter match) |
-| `limit`    | int    | 20      | Max results |
+| `rgb`      | string | —       | Target color as `r,g,b`. Mutually exclusive with `lab`. |
+| `lab`      | string | —       | Target color as `l,a,b`. Mutually exclusive with `rgb`. |
+| `mode`     | string | `primary` | `primary` or `palette` |
+| `max_dist` | float  | —       | Maximum squared LAB distance. No limit if omitted. |
+| `limit`    | int    | `20`    | Max results (max 100) |
+
+Returns `400` if neither `rgb` nor `lab` is provided, or if both are provided.
 
 ### Statistics
 
@@ -112,55 +153,177 @@ GET /color/search?hex=FF5733&mode=lab&max_dist=30&limit=20
 GET /statistic
 ```
 
+Response:
+
+```json
+{
+  "illust_count": 12345,
+  "tag_count": 678,
+  "author_count": 234
+}
+```
+
 ### Tags
 
 ```
-GET /tags
+GET /tags?limit=50&offset=0
+```
+
+| Param    | Type | Default | Description |
+|----------|------|---------|-------------|
+| `limit`  | int  | `30`    | Page size (max 300) |
+| `offset` | int  | `0`     | Pagination offset |
+
+Response (array):
+
+```json
+[
+  {
+    "id": 1,
+    "name": "landscape",
+    "translated_name": "风景",
+    "search_string": "landscape|风景"
+  }
+]
 ```
 
 ### Authors
 
 ```
-GET /authors
+GET /authors?limit=30&offset=0
+```
+
+| Param    | Type | Default | Description |
+|----------|------|---------|-------------|
+| `limit`  | int  | `30`    | Page size (max 300) |
+| `offset` | int  | `0`     | Pagination offset |
+
+```
 GET /authors/{id}
 ```
+
+Returns a single author with their associated images.
 
 ---
 
 ## Admin Endpoints (Auth Required)
 
+All endpoints below require `Authorization: Bearer <token>`.
+
 ### Image Management
 
-| Method   | Path           | Description |
-|----------|----------------|-------------|
-| `PATCH`  | `/image/{id}`  | Update image metadata |
-| `DELETE` | `/image/{id}`  | Soft-delete image |
+| Method   | Path          | Description |
+|----------|---------------|-------------|
+| `PATCH`  | `/image/{id}` | Update image metadata |
+| `DELETE` | `/image/{id}` | Soft-delete image (marks `deleted_at`, sets `is_public=false`) |
+
+#### PATCH /image/{id}
+
+Request body:
+
+```json
+{
+  "title": "Sunset over mountains",
+  "accessible": true,
+  "is_public": true,
+  "avatar_available": false,
+  "colors": []
+}
+```
+
+| Field             | Type            | Notes |
+|-------------------|-----------------|-------|
+| `title`           | string?         | Max 1000 chars, must not be empty |
+| `accessible`      | bool \| null    | Controls non-admin visibility |
+| `is_public`       | bool?           | Public listing flag |
+| `avatar_available`| bool?           | Avatar availability |
+| `colors`          | object \| array | Custom color data |
 
 ### Tag Management
 
-| Method   | Path         | Description |
-|----------|--------------|-------------|
-| `PATCH`  | `/tags/{id}` | Update tag |
-| `DELETE` | `/tags/{id}` | Delete tag |
+| Method   | Path        | Description |
+|----------|-------------|-------------|
+| `PATCH`  | `/tags/{id}` | Update tag translation |
+| `DELETE` | `/tags/{id}` | Delete tag (also removes image associations) |
+
+#### PATCH /tags/{id}
+
+```json
+{ "translated_name": "风景" }
+```
 
 ### Crawler
 
-| Method | Path               | Description |
-|--------|--------------------|-------------|
-| `GET`  | `/crawler`         | List crawler tasks |
-| `POST` | `/crawler`         | Create crawler task |
-| `POST` | `/crawler/discover`| Trigger autonomous discovery |
+| Method | Path                 | Description |
+|--------|----------------------|-------------|
+| `GET`  | `/crawler`           | List crawler tasks |
+| `POST` | `/crawler`           | Create a crawl job |
+| `GET`  | `/crawler/{id}`      | Get crawler task detail |
+| `GET`  | `/crawler/image`     | Get crawl-related image info |
+| `POST` | `/crawler/discover`  | Trigger autonomous image discovery |
+| `GET`  | `/admin/accessibility-queue` | List accessibility check queue |
+
+#### POST /crawler
+
+```json
+{
+  "task_name": "Daily ranking crawl",
+  "crawl_type": 0,
+  "target_start_date": "2026-06-01T00:00:00",
+  "target_end_date": "2026-06-07T00:00:00",
+  "ranking_mode": "day",
+  "illust_type_filter": ["illust"],
+  "exclude_r18": true,
+  "exclude_ai": false,
+  "max_pages": 10,
+  "discover_hops": 3,
+  "discover_seed_limit": 5,
+  "discover_seed_method": "popularity",
+  "disable_discover": false,
+  "credential_ids": [1]
+}
+```
+
+| Field                | Type       | Required | Description |
+|----------------------|------------|----------|-------------|
+| `task_name`          | string     | No       | Human-readable label |
+| `crawl_type`         | int        | No       | `0` = ranking, `1` = user, `2` = bookmarks (default: `1`) |
+| `target_user_id`     | string     | `crawl_type=1` | Pixiv user ID |
+| `target_start_date`  | datetime   | `crawl_type=0` | Ranking start date |
+| `target_end_date`    | datetime   | `crawl_type=0` | Ranking end date |
+| `target_search_prompt`| string    | No       | Search prompt for keyword-based crawl |
+| `ranking_mode`       | string     | No       | `day`, `week`, `month`, `original`, `rookie` (default: `day`) |
+| `illust_type_filter` | string[]   | No       | Filter by illust type: `["illust"]`, `["manga"]`, etc. |
+| `exclude_r18`        | bool       | No       | Exclude R18 content (default: false) |
+| `exclude_ai`         | bool       | No       | Exclude AI-generated content (default: false) |
+| `max_pages`          | int        | No       | Max pages to crawl (0 = unlimited) |
+| `discover_hops`      | int        | No       | Discovery hops after crawl (default: global) |
+| `discover_seed_limit`| int        | No       | Seed images for discovery (default: global) |
+| `discover_seed_method`| string    | No       | `popularity`, `views`, `bookmarks`, `random` |
+| `disable_discover`   | bool       | No       | Skip discovery after crawl (default: false) |
+| `credential_ids`     | int[]      | `crawl_type=2` | Pixiv credential IDs to use |
 
 ### Pixiv Credentials
 
-| Method | Path                          | Description |
-|--------|-------------------------------|-------------|
-| `GET`  | `/pixiv-credential`           | List credentials |
-| `POST` | `/pixiv-credential`           | Add credential |
-| `GET`  | `/pixiv-credential/{id}`      | Get credential |
-| `PATCH`| `/pixiv-credential/{id}`      | Update credential |
-| `DELETE`| `/pixiv-credential/{id}`     | Delete credential |
-| `POST` | `/pixiv-credential/{id}/refresh` | Submit token refresh task |
+| Method  | Path                            | Description |
+|---------|---------------------------------|-------------|
+| `GET`   | `/pixiv-credential`             | List all credentials |
+| `POST`  | `/pixiv-credential`             | Add a new credential |
+| `GET`   | `/pixiv-credential/{id}`        | Get credential detail |
+| `PATCH` | `/pixiv-credential/{id}`        | Update credential |
+| `DELETE`| `/pixiv-credential/{id}`        | Delete credential |
+| `POST`  | `/pixiv-credential/{id}/refresh`| Submit token refresh task |
+| `GET`   | `/pixiv-credential/{id}/token`  | Get current access token |
+
+#### POST /pixiv-credential
+
+```json
+{
+  "pixiv_user_id": "12345678",
+  "refresh_token": "abc...",
+  "note": "Main account"
+}
+```
 
 ---
 
@@ -170,32 +333,17 @@ All task endpoints require authentication.
 
 ### Common Response Fields
 
-Every task object returned by the API has these fields:
-
-| Field         | Type    | Description |
-|---------------|---------|-------------|
-| `id`          | string  | ULID task identifier |
-| `job_type`    | string  | `crawl`, `download`, `color_extract`, `upload`, `accessibility_check`, `discover`, `refresh_pixiv_token` |
-| `status`      | string  | `pending`, `running`, `completed`, `failed` |
-| `priority`    | int     | Task priority (higher = more urgent) |
-| `attempts`    | int     | How many times this task has been attempted |
-| `max_attempts`| int     | Maximum attempts before the task is considered failed (default: 4 = 1 initial + 3 retries) |
-| `run_at`      | string  | When the task was scheduled to run (UTC+8) |
-| `done_at`     | string? | When the task finished (null if not done) |
-| `last_result` | string? | Error message from the last failed attempt |
-| `payload`     | object? | Deserialized job parameters (varies by `job_type`) |
-
-Status mapping from Apalis internals to API:
-
-| Apalis Status | API Status   | Meaning |
-|---------------|--------------|---------|
-| `Pending`     | `pending`    | Waiting for a worker to pick it up |
-| `Running`     | `running`    | Currently being processed by a worker |
-| `Done`        | `completed`  | Finished successfully |
-| `Failed`      | `failed`     | Errored but may have retries remaining |
-| `Killed`      | `failed`     | Retries exhausted — permanently failed |
-
----
+| Field          | Type    | Description |
+|----------------|---------|-------------|
+| `id`           | string  | ULID task identifier |
+| `job_type`     | string  | Job type (see [Job Types](#job-types)) |
+| `status`       | string  | `pending`, `queued`, `running`, `completed`, `failed`, `killed` |
+| `attempts`     | int     | Attempt count |
+| `max_attempts` | int     | Max attempts before permanent failure |
+| `run_at`       | string  | Scheduled run time (UTC+8) |
+| `done_at`      | string? | Completion time (null if not done) |
+| `last_result`  | string? | Error message from last attempt |
+| `payload`      | object? | Deserialized job parameters |
 
 ### List Tasks
 
@@ -206,20 +354,15 @@ GET /tasks?task_type=crawl&status=completed&limit=50&offset=0
 | Param       | Type   | Default | Description |
 |-------------|--------|---------|-------------|
 | `task_type` | string | —       | Filter by job type |
-| `status`    | string | —       | Filter by status: `pending`, `running`, `completed`, `failed` |
-| `limit`     | int    | 50      | Page size (max 200) |
-| `offset`    | int    | 0       | Pagination offset |
+| `status`    | string | —       | Filter by status: `pending`, `running`, `completed`, `failed`, `killed` |
+| `limit`     | int    | `50`    | Page size (max 200) |
+| `offset`    | int    | `0`     | Pagination offset |
 
 Response:
 
 ```json
-{
-  "tasks": [ { /* task object */ }, ... ],
-  "total": 128
-}
+{ "tasks": [...], "total": 128 }
 ```
-
----
 
 ### Get Task
 
@@ -227,9 +370,7 @@ Response:
 GET /tasks/{id}
 ```
 
-Returns a single task object. Returns `404` if not found.
-
----
+Returns a single task object. `404` if not found.
 
 ### Delete Task
 
@@ -237,23 +378,15 @@ Returns a single task object. Returns `404` if not found.
 DELETE /tasks/{id}
 ```
 
-Delete a single task by ID. Returns `404` if not found.
-
-Response:
-
 ```json
 { "message": "Task deleted" }
 ```
-
----
 
 ### Delete Pending Tasks
 
 ```
 DELETE /tasks/pending?task_type=download
 ```
-
-Convenience endpoint to delete all pending tasks. Equivalent to `POST /tasks/clean` with `flags: ["pending"]`.
 
 | Param       | Type   | Description |
 |-------------|--------|-------------|
@@ -265,74 +398,38 @@ Response:
 { "message": "Pending tasks deleted", "deleted": 15 }
 ```
 
----
-
 ### Clean Tasks (Bulk Delete)
 
 ```
 POST /tasks/clean
 Content-Type: application/json
 
-{
-  "flags": ["completed", "failed"],
-  "task_type": "crawl"
-}
+{ "flags": ["completed", "failed"], "task_type": "crawl" }
 ```
-
-Bulk-delete tasks by status flags. This is the most flexible cleanup endpoint.
-
-#### Request Body
 
 | Field       | Type     | Required | Description |
 |-------------|----------|----------|-------------|
-| `flags`     | string[] | Yes      | At least one flag. See table below. |
+| `flags`     | string[] | Yes      | See flag table below |
 | `task_type` | string   | No       | Only clean tasks of this job type |
+| `crawl_type`| int      | No       | Filter crawl tasks: `0`=ranking, `1`=user, `2`=bookmarks |
 
-#### Flags
+**Flags:**
 
-| Flag        | Deletes                          | Side Effects |
-|-------------|----------------------------------|--------------|
-| `completed` | Done tasks                       | None |
-| `failed`    | Failed tasks (retries exhausted) | None |
-| `cancelled` | Killed tasks (manually terminated) | None |
-| `pending`   | Pending tasks                    | None |
-| `running`   | Running tasks                    | Aborts all workers, deletes, then re-spawns workers |
-| `all`       | All of the above                 | Aborts all workers, deletes, then re-spawns workers |
+| Flag        | Deletes |
+|-------------|---------|
+| `completed` | Done tasks |
+| `failed`    | Failed tasks (retries exhausted) |
+| `cancelled` | Manually terminated tasks |
+| `killed`    | Killed tasks |
+| `pending`   | Pending tasks |
+| `running`   | Running tasks |
+| `all`       | All of the above |
 
-**Note on `running` / `all`:** When `task_type` is **not** set, these flags abort all Apalis workers before deleting, then re-spawn fresh workers. This causes a brief interruption in job processing. When `task_type` **is** set, workers are NOT aborted — only the matching rows are deleted from the database, and in-flight workers will fail gracefully on their next poll.
-
-#### Response (200)
+Response:
 
 ```json
 { "deleted": 42, "flags": ["completed", "failed"] }
 ```
-
-#### Errors
-
-- `400` — empty `flags` array or invalid flag value
-- `401` — missing or invalid auth token
-
-#### Examples
-
-Clean all completed and failed tasks:
-
-```json
-{ "flags": ["completed", "failed"] }
-```
-
-Clean everything (nuclear option):
-
-```json
-{ "flags": ["all"] }
-```
-
-Clean only pending download tasks:
-
-```json
-{ "flags": ["pending"], "task_type": "download" }
-```
-
----
 
 ### Root Tasks
 
@@ -340,17 +437,7 @@ Clean only pending download tasks:
 GET /tasks/roots?status=running&limit=20
 ```
 
-Returns only top-level tasks — jobs that have `parent_id IS NULL`. Use this to see high-level crawl jobs without the noise of their subtasks.
-
-Same query parameters as `GET /tasks`.
-
-Response:
-
-```json
-{ "tasks": [...], "total": 5 }
-```
-
----
+Returns only top-level tasks (no parent). Same query params as `GET /tasks`.
 
 ### Task Tree
 
@@ -359,23 +446,17 @@ GET /tasks/{id}/tree
 GET /tasks/{id}/tree?flatten=true
 ```
 
-Returns the full recursive hierarchy of subtasks.
-
-**Default (nested) mode:** Each node contains the job details and a `children` array. Useful for tree UI with expand/collapse.
-
-**Flat mode (`?flatten=true`):** Returns all descendants as a flat `tasks` array. Each item includes `parent_job_id` (direct parent) and `root_job_id` (the root task). Useful for table/list UI with sorting and filtering.
-
-Nested response:
+**Nested mode (default):** Each node has a `children` array for recursive hierarchy.
 
 ```json
 {
   "root_job_id": "01HZ...",
   "children": [
     {
-      "job": { "id": "...", "job_type": "download", "status": "completed", ... },
+      "job": { "id": "...", "job_type": "download", "status": "completed" },
       "children": [
         {
-          "job": { "id": "...", "job_type": "color_extract", "status": "pending", ... },
+          "job": { "id": "...", "job_type": "color_extract", "status": "pending" },
           "children": []
         }
       ]
@@ -384,33 +465,7 @@ Nested response:
 }
 ```
 
-Flat response (`?flatten=true`):
-
-```json
-{
-  "root_job_id": "01HZ...",
-  "tasks": [
-    {
-      "id": "...",
-      "job_type": "download",
-      "status": "completed",
-      "parent_job_id": "01HZ...",
-      "root_job_id": "01HZ...",
-      ...
-    },
-    {
-      "id": "...",
-      "job_type": "color_extract",
-      "status": "pending",
-      "parent_job_id": "...",
-      "root_job_id": "01HZ...",
-      ...
-    }
-  ]
-}
-```
-
----
+**Flat mode (`?flatten=true`):** All descendants as a flat `tasks` array with `parent_job_id` and `root_job_id` references.
 
 ### Subtasks
 
@@ -418,19 +473,11 @@ Flat response (`?flatten=true`):
 GET /tasks/{id}/subtasks?task_type=download&status=completed&limit=50
 ```
 
-Flat (non-recursive) list of direct children. Same query parameters as `GET /tasks`.
-
-Response:
+Flat list of direct children. Same query params as `GET /tasks`.
 
 ```json
-{
-  "parent_job_id": "01HZ...",
-  "subtasks": [ { /* task object */ }, ... ],
-  "total": 12
-}
+{ "parent_job_id": "01HZ...", "subtasks": [...], "total": 12 }
 ```
-
----
 
 ### Interrupt Subtasks
 
@@ -438,7 +485,7 @@ Response:
 DELETE /tasks/{id}/subtasks?task_type=download
 ```
 
-Delete all **pending** children of a task. Only deletes children with status `Pending` — running or completed subtasks are left untouched.
+Delete all **pending** children of a task. Running/completed subtasks are left untouched.
 
 | Param       | Type   | Description |
 |-------------|--------|-------------|
@@ -450,7 +497,7 @@ Response:
 {
   "parent_job_id": "01HZ...",
   "cancelled": 8,
-  "child_ids": ["01HZ...", "01HZ...", ...]
+  "child_ids": ["01HZ...", "01HZ..."]
 }
 ```
 
@@ -466,7 +513,7 @@ All errors return JSON:
 
 | Status | Meaning |
 |--------|---------|
-| `400`  | Bad request (invalid parameters or body) |
+| `400`  | Bad request (invalid parameters, body, or combination like `rgb`+`lab`) |
 | `401`  | Unauthorized (missing or invalid JWT) |
 | `404`  | Resource not found |
 | `500`  | Internal server error (logged, message sanitized) |
@@ -477,19 +524,20 @@ All errors return JSON:
 
 | Type                    | Description |
 |-------------------------|-------------|
-| `crawl`                 | Pixiv ranking/user crawl |
+| `crawl`                 | Pixiv ranking/user/bookmarks crawl |
 | `download`              | Image file download |
 | `color_extract`         | KMeans color palette extraction |
 | `upload`                | Upload to CDN (DogeCloud OSS) |
-| `accessibility_check`   | Alt-text generation |
+| `accessibility_check`   | Alt-text generation / accessibility check |
 | `discover`              | Autonomous image discovery |
 | `refresh_pixiv_token`   | Pixiv OAuth token refresh |
+| `cleanup`               | Task queue maintenance |
 
 ---
 
 ## Task Hierarchy
 
-Tasks form a parent-child tree tracked via `parent_id`/`root_id` columns on the `tasks` table:
+Tasks form a parent-child tree via `parent_id`/`root_id` columns:
 
 ```
 crawl (root)
@@ -505,8 +553,8 @@ crawl (root)
 ```
 
 - Root tasks (crawl, discover) have no parent.
-- Download tasks are children of the crawl task that spawned them.
-- Pipeline tasks (color_extract, upload, accessibility_check) are children of the root crawl task (via `root_job_id`), not the download task.
-- Use `GET /tasks/roots` to see only root tasks.
-- Use `GET /tasks/{id}/tree` to see the full hierarchy.
-- Use `DELETE /tasks/{id}/subtasks` to cancel all pending children of a task.
+- Download tasks are children of the crawl task.
+- Pipeline tasks (color_extract, upload, accessibility_check) are children of the root task.
+- `GET /tasks/roots` — see only root tasks.
+- `GET /tasks/{id}/tree` — full hierarchy.
+- `DELETE /tasks/{id}/subtasks` — cancel pending children.
