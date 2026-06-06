@@ -14,18 +14,14 @@ pub use error::PixivError;
 use sea_orm::DatabaseConnection;
 use std::time::Duration;
 
-use crate::db::query;
 use crate::db::entities::pixiv_credential;
+use crate::db::query;
 
 /// Create a PixivApi client, optionally configured with a proxy and timeout.
 ///
 /// Sets `Accept-Language` header so Pixiv API responses include
 /// `translated_name` on tags in the requested language.
-pub async fn create_api(
-    proxy: &str,
-    accept_lang: &str,
-    timeout: Option<Duration>,
-) -> PixivApi {
+pub async fn create_api(proxy: &str, accept_lang: &str, timeout: Option<Duration>) -> PixivApi {
     let client_config = ClientConfig {
         proxy: if proxy.is_empty() {
             None
@@ -62,8 +58,8 @@ pub async fn auth_with_credential(
     // numeric pixiv_user_id are available.  A non-numeric user_id (e.g. the
     // old placeholder "env_default") would silently become 0, causing Pixiv
     // to return 400 on any endpoint that requires a real user_id.
-    let can_fast_path = cred.access_token.is_some()
-        && cred.pixiv_user_id.parse::<u64>().is_ok_and(|id| id > 0);
+    let can_fast_path =
+        cred.access_token.is_some() && cred.pixiv_user_id.parse::<u64>().is_ok_and(|id| id > 0);
 
     if can_fast_path {
         let at = cred.access_token.as_deref().unwrap();
@@ -83,10 +79,7 @@ pub async fn auth_with_credential(
 
     let _ = query::pixiv_credential::touch_last_used(db, credential_id).await;
 
-    tracing::debug!(
-        credential_id,
-        "Pixiv authentication successful"
-    );
+    tracing::debug!(credential_id, "Pixiv authentication successful");
 
     Ok(credential_id)
 }
@@ -104,10 +97,7 @@ pub async fn recover_auth(
     let cred = query::pixiv_credential::find_by_id(db, credential_id)
         .await
         .map_err(|e| {
-            PixivError::auth_credential(
-                format!("Failed to fetch credential: {}", e),
-                credential_id,
-            )
+            PixivError::auth_credential(format!("Failed to fetch credential: {}", e), credential_id)
         })?
         .ok_or_else(|| PixivError::auth_credential("Credential not found", credential_id))?;
 
@@ -155,17 +145,11 @@ async fn persist_tokens(
         PixivError::persistence("Failed to persist refreshed tokens", credential_id, e)
     })?;
 
-    let _ = query::pixiv_credential::update_status(
-        db,
-        credential_id,
-        pixiv_credential::STATUS_ACTIVE,
-    )
-    .await;
+    let _ =
+        query::pixiv_credential::update_status(db, credential_id, pixiv_credential::STATUS_ACTIVE)
+            .await;
 
-    tracing::debug!(
-        credential_id,
-        "Pixiv tokens persisted successfully"
-    );
+    tracing::debug!(credential_id, "Pixiv tokens persisted successfully");
 
     Ok(())
 }

@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use randimg_core::task_queue::retry::retry_with_auth_recovery;
 
@@ -59,7 +59,7 @@ async fn test_retry_exhausted_after_max_attempts() {
 
     let result = retry_with_auth_recovery(
         "test_op",
-        2, // max 2 retries
+        2,  // max 2 retries
         10, // short backoff
         move || {
             call_count_clone.fetch_add(1, Ordering::SeqCst);

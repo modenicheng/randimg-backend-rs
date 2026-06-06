@@ -4,8 +4,8 @@ use crate::db::entities::{
     image::{self, Entity as Image},
     image_color_palette, tag,
 };
-use sea_orm::*;
 use sea_orm::sea_query::Expr;
+use sea_orm::*;
 
 /// Default max squared Euclidean distance in LAB space for color filtering.
 /// ΔE ≈ 50 — wide enough for semantic color search.
@@ -275,9 +275,18 @@ pub async fn random_image(
             let radius = cp.max_dist.sqrt();
             let palette_rows = PaletteEntity::find()
                 .filter(image_color_palette::Column::ImageId.is_in(candidate_ids))
-                .filter(image_color_palette::Column::LabL.between(cp.lab[0] - radius, cp.lab[0] + radius))
-                .filter(image_color_palette::Column::LabA.between(cp.lab[1] - radius, cp.lab[1] + radius))
-                .filter(image_color_palette::Column::LabB.between(cp.lab[2] - radius, cp.lab[2] + radius))
+                .filter(
+                    image_color_palette::Column::LabL
+                        .between(cp.lab[0] - radius, cp.lab[0] + radius),
+                )
+                .filter(
+                    image_color_palette::Column::LabA
+                        .between(cp.lab[1] - radius, cp.lab[1] + radius),
+                )
+                .filter(
+                    image_color_palette::Column::LabB
+                        .between(cp.lab[2] - radius, cp.lab[2] + radius),
+                )
                 .all(db)
                 .await?;
 
@@ -285,10 +294,7 @@ pub async fn random_image(
             let mut best_by_image: std::collections::HashMap<i32, f64> =
                 std::collections::HashMap::new();
             for p in &palette_rows {
-                let dist = lab_sq_dist(
-                    p.lab_l, p.lab_a, p.lab_b,
-                    cp.lab[0], cp.lab[1], cp.lab[2],
-                );
+                let dist = lab_sq_dist(p.lab_l, p.lab_a, p.lab_b, cp.lab[0], cp.lab[1], cp.lab[2]);
                 if dist <= cp.max_dist {
                     let entry = best_by_image.entry(p.image_id).or_insert(dist);
                     if dist < *entry {
@@ -463,9 +469,18 @@ pub async fn list_images(
                 let radius = cp.max_dist.sqrt();
                 let palette_rows = image_color_palette::Entity::find()
                     .filter(image_color_palette::Column::ImageId.is_in(candidate_ids))
-                    .filter(image_color_palette::Column::LabL.between(cp.lab[0] - radius, cp.lab[0] + radius))
-                    .filter(image_color_palette::Column::LabA.between(cp.lab[1] - radius, cp.lab[1] + radius))
-                    .filter(image_color_palette::Column::LabB.between(cp.lab[2] - radius, cp.lab[2] + radius))
+                    .filter(
+                        image_color_palette::Column::LabL
+                            .between(cp.lab[0] - radius, cp.lab[0] + radius),
+                    )
+                    .filter(
+                        image_color_palette::Column::LabA
+                            .between(cp.lab[1] - radius, cp.lab[1] + radius),
+                    )
+                    .filter(
+                        image_color_palette::Column::LabB
+                            .between(cp.lab[2] - radius, cp.lab[2] + radius),
+                    )
                     .all(db)
                     .await?;
 
@@ -473,10 +488,8 @@ pub async fn list_images(
                 let mut best_by_image: std::collections::HashMap<i32, f64> =
                     std::collections::HashMap::new();
                 for p in &palette_rows {
-                    let dist = lab_sq_dist(
-                        p.lab_l, p.lab_a, p.lab_b,
-                        cp.lab[0], cp.lab[1], cp.lab[2],
-                    );
+                    let dist =
+                        lab_sq_dist(p.lab_l, p.lab_a, p.lab_b, cp.lab[0], cp.lab[1], cp.lab[2]);
                     if dist <= cp.max_dist {
                         let entry = best_by_image.entry(p.image_id).or_insert(dist);
                         if dist < *entry {

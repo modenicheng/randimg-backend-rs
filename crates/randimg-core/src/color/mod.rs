@@ -231,19 +231,23 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
     extract_theme_colors_with_config(img, 12, 50, 2048, 0.5)
 }
 
-    pub fn extract_theme_colors_with_config(
-        img: &DynamicImage,
-        k: usize,
-        max_iter: usize,
-        _batch_size: usize,
-        image_scale: f64,
-    ) -> ThemeColors {
-        run_on_color_pool(|| {
-            let (w, h) = img.dimensions();
-            let max_dim = w.max(h) as f64;
-            let scale = if max_dim > 1024.0 { 1024.0 / max_dim } else { image_scale };
-            let new_w = ((w as f64 * scale) as u32).max(1);
-            let new_h = ((h as f64 * scale) as u32).max(1);
+pub fn extract_theme_colors_with_config(
+    img: &DynamicImage,
+    k: usize,
+    max_iter: usize,
+    _batch_size: usize,
+    image_scale: f64,
+) -> ThemeColors {
+    run_on_color_pool(|| {
+        let (w, h) = img.dimensions();
+        let max_dim = w.max(h) as f64;
+        let scale = if max_dim > 1024.0 {
+            1024.0 / max_dim
+        } else {
+            image_scale
+        };
+        let new_w = ((w as f64 * scale) as u32).max(1);
+        let new_h = ((h as f64 * scale) as u32).max(1);
         let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
         let rgb = small.to_rgb8();
 
@@ -269,14 +273,14 @@ pub fn extract_theme_colors(img: &DynamicImage) -> ThemeColors {
         // NOTE: 使用全量 KMeans 而非 mini-batch。Mini-batch 的 stride 采样会
         // 遗漏稀疏像素（如点缀色），导致异常颜色进入调色板（如图片 680/773 的
         // 幻影绿色）。全量模式 ~1.8s vs mini-batch ~6ms，但准确性优先。
-        let (lab_centroids, counts) =
-            kmeans::kmeans(&lab_pixels, k, max_iter, None, false);
+        let (lab_centroids, counts) = kmeans::kmeans(&lab_pixels, k, max_iter, None, false);
 
         // 按像素数排序，取前 10 个最大的簇
         let mut cluster_pairs: Vec<_> = lab_centroids.into_iter().zip(counts.into_iter()).collect();
         cluster_pairs.sort_by(|a, b| b.1.cmp(&a.1));
         let top_k = 10.min(cluster_pairs.len());
-        let final_centroids: Vec<[f32; 3]> = cluster_pairs[..top_k].iter().map(|(c, _)| *c).collect();
+        let final_centroids: Vec<[f32; 3]> =
+            cluster_pairs[..top_k].iter().map(|(c, _)| *c).collect();
 
         let mut sorted_lab = final_centroids;
         sorted_lab.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));

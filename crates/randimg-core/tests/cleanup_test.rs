@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use migration::MigratorTrait;
-use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use randimg_core::db::entities::task_enum::{TaskStatus, TaskType};
+use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 
 async fn setup_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
@@ -20,7 +20,13 @@ async fn test_cleanup_deletes_old_done_tasks() {
     let old_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
 
     let task = randimg_core::db::query::task::create(
-        &db, TaskType::Download, None, None, None, None, None,
+        &db,
+        TaskType::Download,
+        None,
+        None,
+        None,
+        None,
+        None,
     )
     .await
     .unwrap();
@@ -56,11 +62,10 @@ async fn test_cleanup_deletes_old_done_tasks() {
 async fn test_cleanup_deletes_old_dead_letters() {
     let db = setup_db().await;
 
-    let task = randimg_core::db::query::task::create(
-        &db, TaskType::Crawl, None, None, None, None, None,
-    )
-    .await
-    .unwrap();
+    let task =
+        randimg_core::db::query::task::create(&db, TaskType::Crawl, None, None, None, None, None)
+            .await
+            .unwrap();
 
     let dl = randimg_core::db::query::dead_letter::insert_dead_letter(
         &db,
@@ -78,7 +83,11 @@ async fn test_cleanup_deletes_old_dead_letters() {
     {
         use randimg_core::db::entities::dead_letter::{self, Entity as DeadLetter};
         let old_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
-        if let Some(entry) = DeadLetter::find_by_id(dl.id.clone()).one(&db).await.unwrap() {
+        if let Some(entry) = DeadLetter::find_by_id(dl.id.clone())
+            .one(&db)
+            .await
+            .unwrap()
+        {
             let mut active: dead_letter::ActiveModel = entry.into();
             active.created_at = Set(old_time.into());
             active.update(&db).await.unwrap();
@@ -102,11 +111,10 @@ async fn test_cleanup_preserves_recent_tasks() {
     let db = setup_db().await;
 
     // Create a task marked as done with recent completed_at (now)
-    let task = randimg_core::db::query::task::create(
-        &db, TaskType::Upload, None, None, None, None, None,
-    )
-    .await
-    .unwrap();
+    let task =
+        randimg_core::db::query::task::create(&db, TaskType::Upload, None, None, None, None, None)
+            .await
+            .unwrap();
 
     randimg_core::db::query::task::update_status(&db, &task.id, TaskStatus::Done)
         .await

@@ -25,7 +25,7 @@ fn test_verify_token_wrong_secret_fails() {
 #[test]
 fn test_verify_token_expired() {
     // Create a token that expired 1 hour ago by crafting claims directly
-    use jsonwebtoken::{encode, EncodingKey, Header};
+    use jsonwebtoken::{EncodingKey, Header, encode};
     let claims = Claims {
         sub: "alice".to_string(),
         exp: (chrono::Utc::now() - chrono::Duration::hours(1)).timestamp() as usize,

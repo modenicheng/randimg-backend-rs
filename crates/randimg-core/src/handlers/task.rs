@@ -114,7 +114,10 @@ async fn clean_tasks(
     }
     for f in &flags {
         if !valid_flags.contains(f) {
-            return Err(AppError::BadRequest(format!("Invalid flag: '{}'. Valid flags: {:?}", f, valid_flags)));
+            return Err(AppError::BadRequest(format!(
+                "Invalid flag: '{}'. Valid flags: {:?}",
+                f, valid_flags
+            )));
         }
     }
 
@@ -145,17 +148,11 @@ async fn clean_tasks(
     statuses.dedup();
 
     let parsed_type = body.task_type.as_deref().and_then(parse_task_type);
-    let deleted = if let Some(ct) = body.crawl_type {
+    let (deleted, fang_task_ids) = if let Some(ct) = body.crawl_type {
         // Find crawl task IDs matching the crawl_type by filtering params JSON.
-        let crawl_tasks = query::task::list(
-            &state.db,
-            Some(&TaskType::Crawl),
-            None,
-            10_000,
-            0,
-        )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        let crawl_tasks = query::task::list(&state.db, Some(&TaskType::Crawl), None, 10_000, 0)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let ids: Vec<String> = crawl_tasks
             .iter()
@@ -170,26 +167,20 @@ async fn clean_tasks(
             .collect();
 
         if ids.is_empty() {
-            0u64
+            (0u64, Vec::new())
         } else {
-            query::task::delete_by_statuses_and_ids(&state.db, &statuses, &ids)
-                .await?
+            query::task::delete_by_statuses_and_ids(&state.db, &statuses, &ids).await?
         }
     } else {
-        query::task::delete_by_statuses(
-            &state.db,
-            &statuses,
-            parsed_type.as_ref(),
-        )
-        .await?
+        query::task::delete_by_statuses(&state.db, &statuses, parsed_type.as_ref()).await?
     };
 
-    if let Some(ref short_type) = body.task_type {
-        if let Err(e) = state.queue_backend.remove_tasks_type(short_type).await {
-            tracing::warn!(task_type = %short_type, error = %e, "Failed to remove fang tasks by type");
+    for fang_id in &fang_task_ids {
+        if let Ok(uuid) = Uuid::parse_str(fang_id) {
+            if let Err(e) = state.queue_backend.remove_task(&uuid).await {
+                tracing::warn!(fang_task_id = %fang_id, error = %e, "Failed to remove fang task");
+            }
         }
-    } else if let Err(e) = state.queue_backend.remove_all_tasks().await {
-        tracing::warn!(error = %e, "Failed to remove all fang tasks");
     }
 
     Ok(Json(serde_json::json!({
@@ -205,10 +196,7 @@ pub fn routes() -> Router<Arc<WorkerState>> {
         .route("/tasks/clean", post(clean_tasks))
         .route("/tasks/roots", get(list_roots))
         .route("/tasks/pending", delete(delete_pending_tasks))
-        .route(
-            "/tasks/{task_id}",
-            get(get_task).delete(delete_task),
-        )
+        .route("/tasks/{task_id}", get(get_task).delete(delete_task))
         .route("/tasks/{task_id}/tree", get(get_task_tree))
         .route(
             "/tasks/{task_id}/subtasks",
@@ -246,7 +234,9 @@ fn unmap_status(status: &str) -> Vec<TaskStatus> {
 
 fn row_to_json(t: &task::Model) -> serde_json::Value {
     let created_at = t.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let completed_at = t.completed_at.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    let completed_at = t
+        .completed_at
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
     serde_json::json!({
         "id": t.id,
@@ -307,7 +297,13 @@ pub async fn list_tasks(
     let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
 
     let (rows, total) = tokio::try_join!(
-        query::task::list(db, parsed_type.as_ref(), mapped_status.clone(), limit, offset),
+        query::task::list(
+            db,
+            parsed_type.as_ref(),
+            mapped_status.clone(),
+            limit,
+            offset
+        ),
         query::task::count(db, parsed_type.as_ref(), mapped_status),
     )
     .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -420,16 +416,16 @@ pub async fn delete_pending_tasks(
     Query(q): Query<DeletePendingQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
-    let deleted = query::task::delete_pending(&state.db, parsed_type.as_ref())
+    let (deleted, fang_task_ids) = query::task::delete_pending(&state.db, parsed_type.as_ref())
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    if let Some(ref short_type) = q.task_type {
-        if let Err(e) = state.queue_backend.remove_tasks_type(short_type).await {
-            tracing::warn!(task_type = %short_type, error = %e, "Failed to remove fang tasks by type");
+    for fang_id in &fang_task_ids {
+        if let Ok(uuid) = Uuid::parse_str(fang_id) {
+            if let Err(e) = state.queue_backend.remove_task(&uuid).await {
+                tracing::warn!(fang_task_id = %fang_id, error = %e, "Failed to remove fang task");
+            }
         }
-    } else if let Err(e) = state.queue_backend.remove_all_tasks().await {
-        tracing::warn!(error = %e, "Failed to remove all fang tasks");
     }
 
     Ok(Json(serde_json::json!({
@@ -543,7 +539,9 @@ pub async fn list_roots(
 
             let created_at = r.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
             let updated_at = r.updated_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            let completed_at = r.completed_at.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            let completed_at = r
+                .completed_at
+                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
             serde_json::json!({
                 "id": r.id,
@@ -651,12 +649,12 @@ pub async fn get_task_tree(
     let parsed_type = q.task_type.as_deref().and_then(parse_task_type);
 
     let mapped_status: Option<Vec<TaskStatus>> = q.status.as_deref().map(|s| match s {
-        "pending"   => vec![TaskStatus::Pending, TaskStatus::Queued],
-        "running"   => vec![TaskStatus::Running],
+        "pending" => vec![TaskStatus::Pending, TaskStatus::Queued],
+        "running" => vec![TaskStatus::Running],
         "completed" => vec![TaskStatus::Done],
-        "failed"    => vec![TaskStatus::Failed],
-        "killed"    => vec![TaskStatus::Killed],
-        _           => vec![TaskStatus::Pending, TaskStatus::Queued],
+        "failed" => vec![TaskStatus::Failed],
+        "killed" => vec![TaskStatus::Killed],
+        _ => vec![TaskStatus::Pending, TaskStatus::Queued],
     });
 
     if q.flatten.unwrap_or(false) {
@@ -673,25 +671,28 @@ pub async fn get_task_tree(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        let tasks: Vec<serde_json::Value> = rows.into_iter().map(|r| {
-            serde_json::json!({
-                "id": r.id,
-                "task_type": r.task_type,
-                "status": r.status,
-                "parent_job_id": r.parent_id,
-                "root_job_id": task_id,
-                "crawler_id": r.crawler_id,
-                "image_id": r.image_id,
-                "retry_count": r.retry_count,
-                "progress": r.progress,
-                "priority": r.priority,
-                "created_at": r.created_at,
-                "updated_at": r.updated_at,
-                "completed_at": r.completed_at,
-                "error_message": r.error_message,
-                "params": r.params,
+        let tasks: Vec<serde_json::Value> = rows
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.id,
+                    "task_type": r.task_type,
+                    "status": r.status,
+                    "parent_job_id": r.parent_id,
+                    "root_job_id": task_id,
+                    "crawler_id": r.crawler_id,
+                    "image_id": r.image_id,
+                    "retry_count": r.retry_count,
+                    "progress": r.progress,
+                    "priority": r.priority,
+                    "created_at": r.created_at,
+                    "updated_at": r.updated_at,
+                    "completed_at": r.completed_at,
+                    "error_message": r.error_message,
+                    "params": r.params,
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(Json(serde_json::json!({
             "root_job_id": task_id,
@@ -745,12 +746,12 @@ pub async fn get_subtasks(
     Query(q): Query<RootsOrSubtasksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mapped_status: Option<Vec<TaskStatus>> = q.status.as_deref().map(|s| match s {
-        "pending"   => vec![TaskStatus::Pending, TaskStatus::Queued],
-        "running"   => vec![TaskStatus::Running],
+        "pending" => vec![TaskStatus::Pending, TaskStatus::Queued],
+        "running" => vec![TaskStatus::Running],
         "completed" => vec![TaskStatus::Done],
-        "failed"    => vec![TaskStatus::Failed],
-        "killed"    => vec![TaskStatus::Killed],
-        _           => vec![TaskStatus::Pending, TaskStatus::Queued],
+        "failed" => vec![TaskStatus::Failed],
+        "killed" => vec![TaskStatus::Killed],
+        _ => vec![TaskStatus::Pending, TaskStatus::Queued],
     });
 
     let limit = q.limit.map(|l| l as u64);

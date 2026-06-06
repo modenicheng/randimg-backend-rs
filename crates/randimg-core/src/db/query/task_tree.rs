@@ -1,9 +1,9 @@
 use crate::db::entities::task::{self, Entity as Task};
 use crate::db::entities::task_enum::{TaskStatus, TaskType};
 use chrono::{DateTime, Utc};
-use sea_orm::*;
-use sea_orm::sea_query::Expr;
 use sea_orm::Condition;
+use sea_orm::sea_query::Expr;
+use sea_orm::*;
 use serde_json::Value as JsonValue;
 
 // ---------------------------------------------------------------------------
@@ -109,7 +109,9 @@ pub(crate) fn status_label(status: &TaskStatus) -> &'static str {
 /// Convert a `task::Model` into a JSON value suitable for API responses.
 pub fn model_to_json(m: &task::Model) -> JsonValue {
     let created_at = m.created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let completed_at = m.completed_at.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    let completed_at = m
+        .completed_at
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
     serde_json::json!({
         "id":           m.id,
@@ -163,7 +165,15 @@ pub async fn list_children(
     // Recursively build children for each node, converting Model → JsonValue.
     let mut result = Vec::with_capacity(tasks.len());
     for t in tasks {
-        let children = Box::pin(list_children(db, &t.id, task_type, status, crawl_type, max_depth - 1)).await?;
+        let children = Box::pin(list_children(
+            db,
+            &t.id,
+            task_type,
+            status,
+            crawl_type,
+            max_depth - 1,
+        ))
+        .await?;
         result.push(ChildJobNode {
             job: model_to_json(&t),
             children,
@@ -253,10 +263,7 @@ pub async fn interrupt_subtasks(
 ) -> Result<(Vec<String>, Vec<String>, u64), DbErr> {
     let mut cond = Condition::all()
         .add(task::Column::ParentId.eq(parent_id))
-        .add(
-            task::Column::Status
-                .is_in([TaskStatus::Pending, TaskStatus::Queued]),
-        );
+        .add(task::Column::Status.is_in([TaskStatus::Pending, TaskStatus::Queued]));
 
     if let Some(tt) = task_type {
         cond = cond.add(task::Column::TaskType.eq(tt.clone()));
@@ -369,7 +376,10 @@ fn build_roots_cte_and_filters(
         next_bind += 1;
     }
     if has_crawl_type_filter {
-        filter.push_str(&format!(" AND (t.params::json->>'crawl_type')::int = ${}", next_bind));
+        filter.push_str(&format!(
+            " AND (t.params::json->>'crawl_type')::int = ${}",
+            next_bind
+        ));
     }
 
     let cte_sql = "\
@@ -414,7 +424,8 @@ pub async fn list_roots_derived(
     limit: u64,
     offset: u64,
 ) -> Result<Vec<RootWithDerivedStatus>, DbErr> {
-    let (cte, filter, bind_values) = build_roots_cte_and_filters(task_type, crawl_type, derived_status);
+    let (cte, filter, bind_values) =
+        build_roots_cte_and_filters(task_type, crawl_type, derived_status);
 
     let sql = format!(
         r#"
@@ -474,7 +485,8 @@ pub async fn count_roots_derived(
     crawl_type: Option<i32>,
     derived_status: Option<&str>,
 ) -> Result<u64, DbErr> {
-    let (cte, filter, bind_values) = build_roots_cte_and_filters(task_type, crawl_type, derived_status);
+    let (cte, filter, bind_values) =
+        build_roots_cte_and_filters(task_type, crawl_type, derived_status);
 
     let sql = format!(
         r#"

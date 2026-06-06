@@ -148,7 +148,10 @@ impl std::fmt::Debug for AppConfig {
             .field("dogecloud_secret_key", &"[REDACTED]")
             .field("dogecloud_s3_bucket", &self.dogecloud_s3_bucket)
             .field("dogecloud_s3_endpoint", &self.dogecloud_s3_endpoint)
-            .field("color_worker_rayon_threads", &self.color_worker_rayon_threads)
+            .field(
+                "color_worker_rayon_threads",
+                &self.color_worker_rayon_threads,
+            )
             .field("color_worker_standalone", &self.color_worker_standalone)
             .field("color_extract_k", &self.color_extract_k)
             .field("color_extract_max_iter", &self.color_extract_max_iter)
@@ -166,15 +169,30 @@ impl std::fmt::Debug for AppConfig {
             .field("task_dedup_ttl_secs", &self.task_dedup_ttl_secs)
             .field("task_cleanup_ttl_hours", &self.task_cleanup_ttl_hours)
             .field("dead_letter_ttl_hours", &self.dead_letter_ttl_hours)
-            .field("watchdog_check_interval_secs", &self.watchdog_check_interval_secs)
-            .field("watchdog_stuck_timeout_secs", &self.watchdog_stuck_timeout_secs)
+            .field(
+                "watchdog_check_interval_secs",
+                &self.watchdog_check_interval_secs,
+            )
+            .field(
+                "watchdog_stuck_timeout_secs",
+                &self.watchdog_stuck_timeout_secs,
+            )
             .field("task_concurrency_crawl", &self.task_concurrency_crawl)
             .field("task_concurrency_download", &self.task_concurrency_download)
-            .field("task_concurrency_color_extract", &self.task_concurrency_color_extract)
+            .field(
+                "task_concurrency_color_extract",
+                &self.task_concurrency_color_extract,
+            )
             .field("task_concurrency_upload", &self.task_concurrency_upload)
-            .field("task_concurrency_accessibility_check", &self.task_concurrency_accessibility_check)
+            .field(
+                "task_concurrency_accessibility_check",
+                &self.task_concurrency_accessibility_check,
+            )
             .field("task_concurrency_discover", &self.task_concurrency_discover)
-            .field("task_concurrency_refresh_pixiv_token", &self.task_concurrency_refresh_pixiv_token)
+            .field(
+                "task_concurrency_refresh_pixiv_token",
+                &self.task_concurrency_refresh_pixiv_token,
+            )
             .field("task_concurrency_cleanup", &self.task_concurrency_cleanup)
             .finish()
     }
@@ -207,8 +225,7 @@ impl AppConfig {
             ),
             pixiv_refresh_token: env::var("PIXIV_REFRESH_TOKEN").unwrap_or_default(),
             pixiv_proxy: env::var("PIXIV_PROXY").unwrap_or_default(),
-            pixiv_accept_lang: env::var("PIXIV_ACCEPT_LANG")
-                .unwrap_or_else(|_| "zh-CN".into()),
+            pixiv_accept_lang: env::var("PIXIV_ACCEPT_LANG").unwrap_or_else(|_| "zh-CN".into()),
             pixiv_timeout_secs: env::var("PIXIV_TIMEOUT_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())

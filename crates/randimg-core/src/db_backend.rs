@@ -3,7 +3,6 @@
 //! Re-exports [`QueueBackend`] from the fang async backend and provides a
 //! convenience [`init`] function used by `lib.rs` / `main.rs` during startup.
 
-
 use crate::config::AppConfig;
 pub use crate::task_queue::fang_backend::QueueBackend;
 

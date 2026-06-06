@@ -22,7 +22,10 @@ fn test_create_crawler_request_with_filters() {
     );
 
     let req = parsed.unwrap();
-    assert_eq!(req.illust_type_filter, Some(vec!["illust".to_string(), "manga".to_string()]));
+    assert_eq!(
+        req.illust_type_filter,
+        Some(vec!["illust".to_string(), "manga".to_string()])
+    );
     assert_eq!(req.exclude_r18, Some(true));
     assert_eq!(req.exclude_ai, Some(false));
 }
@@ -79,7 +82,10 @@ fn test_crawl_job_serialization_with_filters() {
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: CrawlJob = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(deserialized.illust_type_filter, Some(vec!["illust".to_string()]));
+    assert_eq!(
+        deserialized.illust_type_filter,
+        Some(vec!["illust".to_string()])
+    );
     assert_eq!(deserialized.exclude_r18, Some(true));
     assert_eq!(deserialized.exclude_ai, Some(true));
 }

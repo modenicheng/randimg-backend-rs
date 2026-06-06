@@ -1,7 +1,7 @@
 //! Unit tests for task queue job structs: serialization/deserialization.
 
-use randimg_core::task_queue::jobs::*;
 use randimg_core::task_queue::CrawlType;
+use randimg_core::task_queue::jobs::*;
 
 #[test]
 fn test_crawl_job_roundtrip() {
@@ -32,7 +32,10 @@ fn test_crawl_job_roundtrip() {
     assert_eq!(deserialized.crawler_id, 1);
     assert_eq!(deserialized.crawl_type, 1);
     assert_eq!(deserialized.target_user_id.as_deref(), Some("12345"));
-    assert_eq!(deserialized.target_search_prompt.as_deref(), Some("landscape"));
+    assert_eq!(
+        deserialized.target_search_prompt.as_deref(),
+        Some("landscape")
+    );
     assert!(deserialized.ranking_mode.is_none());
     assert!(deserialized.max_pages.is_none());
     assert!(deserialized.discover_hops.is_none());
@@ -57,7 +60,10 @@ fn test_download_job_roundtrip() {
     let json = serde_json::to_string(&job).unwrap();
     let deserialized: DownloadJob = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.image_id, 42);
-    assert_eq!(deserialized.source_image_url, "https://example.com/image.jpg");
+    assert_eq!(
+        deserialized.source_image_url,
+        "https://example.com/image.jpg"
+    );
     assert_eq!(deserialized.image_path, "/data/images/42.jpg");
     assert!(deserialized.task_id.is_none());
 }
@@ -255,7 +261,10 @@ fn test_parent_job_id_roundtrip() {
     assert!(json.contains("parent-uuid-abc"));
     assert!(json.contains("task-uuid-xyz"));
     let deserialized: CrawlJob = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.parent_job_id.as_deref(), Some("parent-uuid-abc"));
+    assert_eq!(
+        deserialized.parent_job_id.as_deref(),
+        Some("parent-uuid-abc")
+    );
     assert_eq!(deserialized.task_id.as_deref(), Some("task-uuid-xyz"));
 }
 
@@ -309,7 +318,9 @@ fn test_crawl_type_debug_and_clone() {
 fn test_task_timeout_config_defaults_to_300() {
     // Verify that the env var parsing logic defaults to 300 when TASK_DEFAULT_TIMEOUT_SECS is unset
     // SAFETY: test-only env mutation, no concurrent threads touch this var
-    unsafe { std::env::remove_var("TASK_DEFAULT_TIMEOUT_SECS"); }
+    unsafe {
+        std::env::remove_var("TASK_DEFAULT_TIMEOUT_SECS");
+    }
     let val: u64 = std::env::var("TASK_DEFAULT_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())

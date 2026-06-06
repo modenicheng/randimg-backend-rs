@@ -147,13 +147,17 @@ impl QueueBackend {
         task_id: Option<&str>,
     ) -> Result<String, String> {
         let params_str = metadata.to_string();
-        if !self.fingerprint_cache.check_and_insert(task_type, &params_str) {
+        if !self
+            .fingerprint_cache
+            .check_and_insert(task_type, &params_str)
+        {
             tracing::debug!(task_type, "Skipping duplicate task within dedup TTL");
             return Err("duplicate task fingerprint within TTL".into());
         }
 
         // Parse task_type string to enum for DB storage
-        let task_type_enum: TaskType = task_type.parse()
+        let task_type_enum: TaskType = task_type
+            .parse()
             .map_err(|e: String| format!("Invalid task type '{}': {}", task_type, e))?;
 
         // 开启事务 — API 数据库上的 SeaORM 事务
@@ -293,5 +297,3 @@ impl QueueBackend {
         &self.queue
     }
 }
-
-

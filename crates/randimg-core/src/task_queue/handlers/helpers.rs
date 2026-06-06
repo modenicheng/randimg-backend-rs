@@ -27,11 +27,18 @@ pub(super) async fn save_illust(
     // Filter by illust type if filter is specified
     if let Some(ref types) = illust_type_filter {
         if !types.is_empty() {
-            let illust_type = illust.r#type.as_ref()
+            let illust_type = illust
+                .r#type
+                .as_ref()
                 .map(|t| format!("{:?}", t).to_lowercase())
                 .unwrap_or_default();
             if !types.contains(&illust_type) {
-                tracing::debug!("Skipping illust {} (type={}, not in filter {:?})", illust.id, illust_type, types);
+                tracing::debug!(
+                    "Skipping illust {} (type={}, not in filter {:?})",
+                    illust.id,
+                    illust_type,
+                    types
+                );
                 return Ok(Vec::new());
             }
         }
@@ -40,7 +47,11 @@ pub(super) async fn save_illust(
     // Filter out R18 content if requested
     if exclude_r18.unwrap_or(false) {
         if illust.x_restrict.unwrap_or(0) > 0 {
-            tracing::debug!("Skipping R18 illust {} (x_restrict={})", illust.id, illust.x_restrict.unwrap_or(0));
+            tracing::debug!(
+                "Skipping R18 illust {} (x_restrict={})",
+                illust.id,
+                illust.x_restrict.unwrap_or(0)
+            );
             return Ok(Vec::new());
         }
     }
@@ -48,7 +59,11 @@ pub(super) async fn save_illust(
     // Filter out AI-generated content if requested
     if exclude_ai.unwrap_or(false) {
         if illust.illust_ai_type.unwrap_or(0) >= 2 {
-            tracing::debug!("Skipping AI illust {} (illust_ai_type={})", illust.id, illust.illust_ai_type.unwrap_or(0));
+            tracing::debug!(
+                "Skipping AI illust {} (illust_ai_type={})",
+                illust.id,
+                illust.illust_ai_type.unwrap_or(0)
+            );
             return Ok(Vec::new());
         }
     }
@@ -244,7 +259,10 @@ pub(super) fn extract_param_from_url(url: &str, param: &str) -> Option<String> {
 }
 
 /// Mark an image as downloaded in the database.
-pub(super) async fn mark_downloaded(db: &sea_orm::DatabaseConnection, image_id: i32) -> Result<(), sea_orm::DbErr> {
+pub(super) async fn mark_downloaded(
+    db: &sea_orm::DatabaseConnection,
+    image_id: i32,
+) -> Result<(), sea_orm::DbErr> {
     use crate::db::entities::image::{self, Entity as Image};
     if let Some(img) = Image::find_by_id(image_id).one(db).await? {
         let mut active: image::ActiveModel = img.into();
@@ -269,7 +287,7 @@ pub(super) async fn spawn_downstream_children(
         image_path: job.image_path.clone(),
         parent_job_id: Some(current_id.to_string()),
         task_id: Some(color_task_id.clone()),
-        max_retries: 0,  // CPU-bound, no retry
+        max_retries: 0, // CPU-bound, no retry
         backoff_base: state.config.task_backoff_base,
     };
     let color_metadata = serde_json::to_value(&color_job)
@@ -300,13 +318,37 @@ pub(super) async fn spawn_downstream_children(
         .map_err(|e| format!("Failed to serialize accessibility_check job: {}", e))?;
 
     let color_fut = state.queue_backend.push_task(
-        &color_job, "color_extract", color_metadata, &state.db, Some(current_id), Some(upstream_id), None, Some(job.image_id), Some(&color_task_id),
+        &color_job,
+        "color_extract",
+        color_metadata,
+        &state.db,
+        Some(current_id),
+        Some(upstream_id),
+        None,
+        Some(job.image_id),
+        Some(&color_task_id),
     );
     let upload_fut = state.queue_backend.push_task(
-        &upload_job, "upload", upload_metadata, &state.db, Some(current_id), Some(upstream_id), None, Some(job.image_id), Some(&upload_task_id),
+        &upload_job,
+        "upload",
+        upload_metadata,
+        &state.db,
+        Some(current_id),
+        Some(upstream_id),
+        None,
+        Some(job.image_id),
+        Some(&upload_task_id),
     );
     let a11y_fut = state.queue_backend.push_task(
-        &a11y_job, "accessibility_check", a11y_metadata, &state.db, Some(current_id), Some(upstream_id), None, Some(job.image_id), Some(&a11y_task_id),
+        &a11y_job,
+        "accessibility_check",
+        a11y_metadata,
+        &state.db,
+        Some(current_id),
+        Some(upstream_id),
+        None,
+        Some(job.image_id),
+        Some(&a11y_task_id),
     );
 
     let (color_res, upload_res, a11y_res) = tokio::join!(color_fut, upload_fut, a11y_fut);

@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
+use fang::FangError;
+use fang::async_trait;
 use fang::asynk::async_queue::AsyncQueueable;
 use fang::asynk::async_runnable::AsyncRunnable;
-use fang::async_trait;
 use fang::typetag;
-use fang::FangError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
+use super::handlers;
 use crate::WorkerState;
 use crate::db::entities::task_enum::TaskStatus;
 use crate::db::query;
-use super::handlers;
 use serde_json::json;
 
 // ── AsyncRunnable macro ────────────────────────────────────────
@@ -147,7 +147,9 @@ macro_rules! impl_async_runnable {
                         // Record timestamp for watchdog
                         state.last_activity.insert($task_type.to_string(), std::time::Instant::now());
 
-                        result.map_err(|e| FangError { description: e })
+                        // Return Ok to prevent Fang from retrying — retry/DLQ already handled
+                        // in the Err branch above (update status, increment retry, dead letter)
+                        Ok(())
                     }
                     Err(_elapsed) => {
                         let timeout_msg = format!("Task timed out after {}s", timeout_secs);
@@ -189,8 +191,12 @@ macro_rules! impl_async_runnable {
     };
 }
 
-fn default_max_retries() -> i32 { 3 }
-fn default_backoff_base() -> u32 { 2 }
+fn default_max_retries() -> i32 {
+    3
+}
+fn default_backoff_base() -> u32 {
+    2
+}
 
 // ── Global WorkerState accessor ────────────────────────────────
 
@@ -425,7 +431,15 @@ impl_async_runnable!(CrawlJob, handle_crawl, "crawl");
 impl_async_runnable!(DownloadJob, handle_download, "download");
 impl_async_runnable!(ColorExtractJob, handle_color_extract, "color_extract");
 impl_async_runnable!(UploadJob, handle_upload, "upload");
-impl_async_runnable!(AccessibilityCheckJob, handle_accessibility_check, "accessibility_check");
+impl_async_runnable!(
+    AccessibilityCheckJob,
+    handle_accessibility_check,
+    "accessibility_check"
+);
 impl_async_runnable!(DiscoverJob, handle_discover, "discover");
-impl_async_runnable!(RefreshPixivTokenJob, handle_refresh_pixiv_token, "refresh_pixiv_token");
+impl_async_runnable!(
+    RefreshPixivTokenJob,
+    handle_refresh_pixiv_token,
+    "refresh_pixiv_token"
+);
 impl_async_runnable!(CleanupJob, handle_cleanup, "cleanup");

@@ -84,7 +84,7 @@ async fn setup_db() -> DatabaseConnection {
 
 /// Build a router with a subset of handlers for testing.
 async fn build_test_router(db: DatabaseConnection, config: AppConfig) -> axum::Router {
-    use randimg_core::handlers::{health, auth, tag, author, statistic, image};
+    use randimg_core::handlers::{auth, author, health, image, statistic, tag};
 
     let queue_backend = db_backend::init(&config)
         .await
@@ -118,9 +118,9 @@ async fn build_test_router(db: DatabaseConnection, config: AppConfig) -> axum::R
 async fn response_json(resp: Response) -> (StatusCode, Value) {
     let status = resp.status();
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| {
-        serde_json::json!({"_raw": String::from_utf8_lossy(&body_bytes).to_string()})
-    });
+    let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(
+        |_| serde_json::json!({"_raw": String::from_utf8_lossy(&body_bytes).to_string()}),
+    );
     (status, json)
 }
 
@@ -167,7 +167,9 @@ async fn test_login_success() {
                 .method("POST")
                 .uri("/token")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"username":"admin","password":"testpassword"}"#))
+                .body(Body::from(
+                    r#"{"username":"admin","password":"testpassword"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -238,9 +240,7 @@ async fn test_get_tags_empty() {
     let app = build_test_router(db, config).await;
 
     let resp = app
-        .oneshot(
-            Request::builder().uri("/tags").body(Body::empty()).unwrap(),
-        )
+        .oneshot(Request::builder().uri("/tags").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -255,15 +255,17 @@ async fn test_get_tags_with_data() {
     let db = setup_db().await;
     let config = make_test_config();
 
-    randimg_core::db::query::tag::find_or_create(&db, "landscape", Some("风景")).await.unwrap();
-    randimg_core::db::query::tag::find_or_create(&db, "portrait", Some("肖像")).await.unwrap();
+    randimg_core::db::query::tag::find_or_create(&db, "landscape", Some("风景"))
+        .await
+        .unwrap();
+    randimg_core::db::query::tag::find_or_create(&db, "portrait", Some("肖像"))
+        .await
+        .unwrap();
 
     let app = build_test_router(db, config).await;
 
     let resp = app
-        .oneshot(
-            Request::builder().uri("/tags").body(Body::empty()).unwrap(),
-        )
+        .oneshot(Request::builder().uri("/tags").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -282,14 +284,19 @@ async fn test_get_tags_with_pagination() {
     let config = make_test_config();
 
     for i in 0..5 {
-        randimg_core::db::query::tag::find_or_create(&db, &format!("tag{}", i), None).await.unwrap();
+        randimg_core::db::query::tag::find_or_create(&db, &format!("tag{}", i), None)
+            .await
+            .unwrap();
     }
 
     let app = build_test_router(db, config).await;
 
     let resp = app
         .oneshot(
-            Request::builder().uri("/tags?limit=2").body(Body::empty()).unwrap(),
+            Request::builder()
+                .uri("/tags?limit=2")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -325,10 +332,14 @@ async fn test_update_tag_with_auth() {
     let db = setup_db().await;
     let config = make_test_config();
 
-    let tag = randimg_core::db::query::tag::find_or_create(&db, "sunset", None).await.unwrap();
+    let tag = randimg_core::db::query::tag::find_or_create(&db, "sunset", None)
+        .await
+        .unwrap();
 
     let pw_hash = randimg_core::auth::password::hash_password("pw").unwrap();
-    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true).await.unwrap();
+    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true)
+        .await
+        .unwrap();
     let token = randimg_core::auth::jwt::create_token("admin", &config.secret_key, 60).unwrap();
 
     let app = build_test_router(db, config).await;
@@ -357,7 +368,9 @@ async fn test_update_tag_not_found() {
     let config = make_test_config();
 
     let pw_hash = randimg_core::auth::password::hash_password("pw").unwrap();
-    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true).await.unwrap();
+    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true)
+        .await
+        .unwrap();
     let token = randimg_core::auth::jwt::create_token("admin", &config.secret_key, 60).unwrap();
 
     let app = build_test_router(db, config).await;
@@ -383,10 +396,14 @@ async fn test_delete_tag_with_auth() {
     let db = setup_db().await;
     let config = make_test_config();
 
-    let tag = randimg_core::db::query::tag::find_or_create(&db, "deleteme", None).await.unwrap();
+    let tag = randimg_core::db::query::tag::find_or_create(&db, "deleteme", None)
+        .await
+        .unwrap();
 
     let pw_hash = randimg_core::auth::password::hash_password("pw").unwrap();
-    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true).await.unwrap();
+    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true)
+        .await
+        .unwrap();
     let token = randimg_core::auth::jwt::create_token("admin", &config.secret_key, 60).unwrap();
 
     let app = build_test_router(db, config).await;
@@ -414,7 +431,9 @@ async fn test_delete_tag_not_found() {
     let config = make_test_config();
 
     let pw_hash = randimg_core::auth::password::hash_password("pw").unwrap();
-    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true).await.unwrap();
+    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true)
+        .await
+        .unwrap();
     let token = randimg_core::auth::jwt::create_token("admin", &config.secret_key, 60).unwrap();
 
     let app = build_test_router(db, config).await;
@@ -444,7 +463,10 @@ async fn test_list_authors_empty() {
 
     let resp = app
         .oneshot(
-            Request::builder().uri("/authors").body(Body::empty()).unwrap(),
+            Request::builder()
+                .uri("/authors")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -459,14 +481,21 @@ async fn test_list_authors_with_data() {
     let db = setup_db().await;
     let config = make_test_config();
 
-    randimg_core::db::query::author::find_or_create(&db, "Artist1", Some("pixiv"), Some("p1")).await.unwrap();
-    randimg_core::db::query::author::find_or_create(&db, "Artist2", Some("twitter"), Some("t1")).await.unwrap();
+    randimg_core::db::query::author::find_or_create(&db, "Artist1", Some("pixiv"), Some("p1"))
+        .await
+        .unwrap();
+    randimg_core::db::query::author::find_or_create(&db, "Artist2", Some("twitter"), Some("t1"))
+        .await
+        .unwrap();
 
     let app = build_test_router(db, config).await;
 
     let resp = app
         .oneshot(
-            Request::builder().uri("/authors").body(Body::empty()).unwrap(),
+            Request::builder()
+                .uri("/authors")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -483,7 +512,10 @@ async fn test_get_author_by_id() {
     let config = make_test_config();
 
     let author = randimg_core::db::query::author::find_or_create(
-        &db, "SoloArtist", Some("pixiv"), Some("solo1"),
+        &db,
+        "SoloArtist",
+        Some("pixiv"),
+        Some("solo1"),
     )
     .await
     .unwrap();
@@ -535,7 +567,10 @@ async fn test_statistic_empty_db() {
 
     let resp = app
         .oneshot(
-            Request::builder().uri("/statistic").body(Body::empty()).unwrap(),
+            Request::builder()
+                .uri("/statistic")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -552,15 +587,24 @@ async fn test_statistic_with_data() {
     let db = setup_db().await;
     let config = make_test_config();
 
-    randimg_core::db::query::tag::find_or_create(&db, "t1", None).await.unwrap();
-    randimg_core::db::query::tag::find_or_create(&db, "t2", None).await.unwrap();
-    randimg_core::db::query::author::find_or_create(&db, "A1", Some("p"), Some("1")).await.unwrap();
+    randimg_core::db::query::tag::find_or_create(&db, "t1", None)
+        .await
+        .unwrap();
+    randimg_core::db::query::tag::find_or_create(&db, "t2", None)
+        .await
+        .unwrap();
+    randimg_core::db::query::author::find_or_create(&db, "A1", Some("p"), Some("1"))
+        .await
+        .unwrap();
 
     let app = build_test_router(db, config).await;
 
     let resp = app
         .oneshot(
-            Request::builder().uri("/statistic").body(Body::empty()).unwrap(),
+            Request::builder()
+                .uri("/statistic")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -581,9 +625,7 @@ async fn test_random_image_not_found_when_empty() {
     let app = build_test_router(db, config).await;
 
     let resp = app
-        .oneshot(
-            Request::builder().uri("/").body(Body::empty()).unwrap(),
-        )
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -598,7 +640,10 @@ async fn test_get_image_not_found() {
 
     let resp = app
         .oneshot(
-            Request::builder().uri("/image/99999").body(Body::empty()).unwrap(),
+            Request::builder()
+                .uri("/image/99999")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -613,9 +658,7 @@ async fn test_list_images_empty() {
     let app = build_test_router(db, config).await;
 
     let resp = app
-        .oneshot(
-            Request::builder().uri("/list").body(Body::empty()).unwrap(),
-        )
+        .oneshot(Request::builder().uri("/list").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -710,7 +753,9 @@ async fn test_patch_image_empty_title_rejected() {
     let config = make_test_config();
 
     let pw_hash = randimg_core::auth::password::hash_password("pw").unwrap();
-    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true).await.unwrap();
+    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true)
+        .await
+        .unwrap();
     let token = randimg_core::auth::jwt::create_token("admin", &config.secret_key, 60).unwrap();
 
     let app = build_test_router(db, config).await;
@@ -737,7 +782,9 @@ async fn test_patch_image_invalid_accessible_type() {
     let config = make_test_config();
 
     let pw_hash = randimg_core::auth::password::hash_password("pw").unwrap();
-    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true).await.unwrap();
+    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true)
+        .await
+        .unwrap();
     let token = randimg_core::auth::jwt::create_token("admin", &config.secret_key, 60).unwrap();
 
     let app = build_test_router(db, config).await;
@@ -764,7 +811,9 @@ async fn test_patch_image_invalid_colors_type() {
     let config = make_test_config();
 
     let pw_hash = randimg_core::auth::password::hash_password("pw").unwrap();
-    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true).await.unwrap();
+    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true)
+        .await
+        .unwrap();
     let token = randimg_core::auth::jwt::create_token("admin", &config.secret_key, 60).unwrap();
 
     let app = build_test_router(db, config).await;
@@ -791,7 +840,9 @@ async fn test_patch_image_not_found() {
     let config = make_test_config();
 
     let pw_hash = randimg_core::auth::password::hash_password("pw").unwrap();
-    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true).await.unwrap();
+    randimg_core::db::query::admin::create(&db, "admin", &pw_hash, true)
+        .await
+        .unwrap();
     let token = randimg_core::auth::jwt::create_token("admin", &config.secret_key, 60).unwrap();
 
     let app = build_test_router(db, config).await;

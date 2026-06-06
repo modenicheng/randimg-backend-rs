@@ -90,10 +90,7 @@ impl Watchdog {
                 }
                 None => {
                     // No activity recorded yet — pool hasn't processed any tasks
-                    tracing::debug!(
-                        pool = pool_name,
-                        "Worker pool has no recorded activity yet"
-                    );
+                    tracing::debug!(pool = pool_name, "Worker pool has no recorded activity yet");
                 }
             }
         }

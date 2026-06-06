@@ -10,7 +10,7 @@ use crate::pixiv::PixivApi;
 use super::super::CrawlType;
 use super::super::jobs::*;
 use super::super::retry::retry_with_auth_recovery;
-use super::helpers::{save_illust, extract_param_from_url};
+use super::helpers::{extract_param_from_url, save_illust};
 
 // ---------------------------------------------------------------------------
 // Crawl handlers
@@ -18,7 +18,10 @@ use super::helpers::{save_illust, extract_param_from_url};
 
 /// Crawl Pixiv illustrations (by user, ranking, or bookmarks).
 pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(), String> {
-    let current_id = job.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let current_id = job
+        .task_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let crawl_type = job.crawl_type;
     let crawler_id = job.crawler_id;
 
@@ -34,11 +37,14 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
         Some(Duration::from_secs(state.config.pixiv_timeout_secs)),
     )
     .await;
-    let credential_id = if let Some(cred) = query::pixiv_credential::find_one_active_random(&state.db)
-        .await
-        .map_err(|e| format!("Failed to fetch credential: {}", e))?
+    let credential_id = if let Some(cred) =
+        query::pixiv_credential::find_one_active_random(&state.db)
+            .await
+            .map_err(|e| format!("Failed to fetch credential: {}", e))?
     {
-        crate::pixiv::auth_with_credential(&api, &cred, &state.db).await.map_err(|e| e.to_string())?
+        crate::pixiv::auth_with_credential(&api, &cred, &state.db)
+            .await
+            .map_err(|e| e.to_string())?
     } else {
         return Err("No active Pixiv credentials found".into());
     };
@@ -46,7 +52,9 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
     let result = match CrawlType::try_from(crawl_type)? {
         CrawlType::Ranking => crawl_ranking(&**state, &api, credential_id, &job, &current_id).await,
         CrawlType::User => crawl_user(&**state, &api, credential_id, &job, &current_id).await,
-        CrawlType::Bookmarks => crawl_bookmarks(&**state, &api, credential_id, &job, &current_id).await,
+        CrawlType::Bookmarks => {
+            crawl_bookmarks(&**state, &api, credential_id, &job, &current_id).await
+        }
     };
 
     // Update crawler status based on result
@@ -66,29 +74,39 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
             if job.disable_discover.unwrap_or(false) {
                 tracing::info!(crawler_id, "Discover disabled for this crawl job, skipping");
             } else {
-            let discover_task_id = uuid::Uuid::new_v4().to_string();
-            let discover_job = DiscoverJob {
-                hop: 0,
-                max_hops: job.discover_hops,
-                seed_limit: job.discover_seed_limit,
-                seed_method: job.discover_seed_method.clone(),
-                credential_ids: job.credential_ids.clone(),
-                parent_job_id: Some(current_id.clone()),
-                task_id: Some(discover_task_id.clone()),
-                root_job_id: Some(current_id.clone()),
-                illust_type_filter: job.illust_type_filter.clone(),
-                exclude_r18: job.exclude_r18,
-                exclude_ai: job.exclude_ai,
-                max_retries: state.config.task_max_retries,
-                backoff_base: state.config.task_backoff_base,
-            };
-            let metadata = serde_json::to_value(&discover_job)
-                .map_err(|e| format!("Failed to serialize discover job: {}", e))?;
-            state
-                .queue_backend
-                .push_task(&discover_job, "discover", metadata, &state.db, Some(&current_id), Some(&current_id), None, None, Some(&discover_task_id))
-                .await
-                .map_err(|e| format!("Failed to submit discover task: {}", e))?;
+                let discover_task_id = uuid::Uuid::new_v4().to_string();
+                let discover_job = DiscoverJob {
+                    hop: 0,
+                    max_hops: job.discover_hops,
+                    seed_limit: job.discover_seed_limit,
+                    seed_method: job.discover_seed_method.clone(),
+                    credential_ids: job.credential_ids.clone(),
+                    parent_job_id: Some(current_id.clone()),
+                    task_id: Some(discover_task_id.clone()),
+                    root_job_id: Some(current_id.clone()),
+                    illust_type_filter: job.illust_type_filter.clone(),
+                    exclude_r18: job.exclude_r18,
+                    exclude_ai: job.exclude_ai,
+                    max_retries: state.config.task_max_retries,
+                    backoff_base: state.config.task_backoff_base,
+                };
+                let metadata = serde_json::to_value(&discover_job)
+                    .map_err(|e| format!("Failed to serialize discover job: {}", e))?;
+                state
+                    .queue_backend
+                    .push_task(
+                        &discover_job,
+                        "discover",
+                        metadata,
+                        &state.db,
+                        Some(&current_id),
+                        Some(&current_id),
+                        None,
+                        None,
+                        Some(&discover_task_id),
+                    )
+                    .await
+                    .map_err(|e| format!("Failed to submit discover task: {}", e))?;
             } // end discover check
         }
         Err(_) => {
@@ -120,9 +138,18 @@ async fn crawl_ranking(
             "illust_ranking",
             state.config.auth_max_retries,
             state.config.auth_backoff_base_ms,
-            || async { api.illust_ranking(Some(mode), date, Some(offset)).await.map_err(|e| e.to_string()) },
-            || async { crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
-        ).await?;
+            || async {
+                api.illust_ranking(Some(mode), date, Some(offset))
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            || async {
+                crate::pixiv::recover_auth(api, credential_id, &state.db)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+        )
+        .await?;
 
         let data = resp.data.ok_or("No data in ranking response")?;
         let illusts = data.illusts;
@@ -132,7 +159,14 @@ async fn crawl_ranking(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
+            let downloads = save_illust(
+                state,
+                illust,
+                job.illust_type_filter.clone(),
+                job.exclude_r18,
+                job.exclude_ai,
+            )
+            .await?;
             for dl in downloads {
                 let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
@@ -149,7 +183,17 @@ async fn crawl_ranking(
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
                 state
                     .queue_backend
-                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id), Some(&download_task_id))
+                    .push_task(
+                        &download_job,
+                        "download",
+                        metadata,
+                        &state.db,
+                        Some(parent_id),
+                        Some(parent_id),
+                        None,
+                        Some(dl.image_id),
+                        Some(&download_task_id),
+                    )
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }
@@ -184,14 +228,13 @@ async fn crawl_user(
         .parse::<u64>()
         .map_err(|_| "invalid target_user_id")?;
 
-    let illust_type: Option<&str> = job.illust_type_filter.as_ref()
-        .and_then(|f| {
-            if f.len() == 1 && matches!(f[0].as_str(), "illust" | "manga") {
-                Some(f[0].as_str())
-            } else {
-                None
-            }
-        });
+    let illust_type: Option<&str> = job.illust_type_filter.as_ref().and_then(|f| {
+        if f.len() == 1 && matches!(f[0].as_str(), "illust" | "manga") {
+            Some(f[0].as_str())
+        } else {
+            None
+        }
+    });
     let max_pages = job.max_pages.unwrap_or(0);
 
     let mut offset = 0u32;
@@ -201,9 +244,18 @@ async fn crawl_user(
             "user_illusts",
             state.config.auth_max_retries,
             state.config.auth_backoff_base_ms,
-            || async { api.user_illusts(user_id, illust_type, Some(offset)).await.map_err(|e| e.to_string()) },
-            || async { crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
-        ).await?;
+            || async {
+                api.user_illusts(user_id, illust_type, Some(offset))
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            || async {
+                crate::pixiv::recover_auth(api, credential_id, &state.db)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+        )
+        .await?;
 
         let data = resp.data.ok_or("No data in user_illusts response")?;
         let illusts = data.illusts;
@@ -213,7 +265,14 @@ async fn crawl_user(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
+            let downloads = save_illust(
+                state,
+                illust,
+                job.illust_type_filter.clone(),
+                job.exclude_r18,
+                job.exclude_ai,
+            )
+            .await?;
             for dl in downloads {
                 let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
@@ -230,7 +289,17 @@ async fn crawl_user(
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
                 state
                     .queue_backend
-                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id), Some(&download_task_id))
+                    .push_task(
+                        &download_job,
+                        "download",
+                        metadata,
+                        &state.db,
+                        Some(parent_id),
+                        Some(parent_id),
+                        None,
+                        Some(dl.image_id),
+                        Some(&download_task_id),
+                    )
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }
@@ -263,7 +332,10 @@ async fn crawl_bookmarks(
         .await
         .ok_or("Not authenticated or no user_id")?;
 
-    let tags = job.target_search_prompt.as_deref().filter(|s| !s.is_empty());
+    let tags = job
+        .target_search_prompt
+        .as_deref()
+        .filter(|s| !s.is_empty());
     let max_pages = job.max_pages.unwrap_or(0);
 
     tracing::info!(
@@ -281,9 +353,18 @@ async fn crawl_bookmarks(
             "user_bookmarks_illust",
             state.config.auth_max_retries,
             state.config.auth_backoff_base_ms,
-            || async { api.user_bookmarks_illust(user_id, Some("public"), max_bookmark_id, tags).await.map_err(|e| e.to_string()) },
-            || async { crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
-        ).await?;
+            || async {
+                api.user_bookmarks_illust(user_id, Some("public"), max_bookmark_id, tags)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            || async {
+                crate::pixiv::recover_auth(api, credential_id, &state.db)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+        )
+        .await?;
 
         let data = resp.data.ok_or("No data in bookmarks response")?;
         let illusts = data.illusts;
@@ -293,7 +374,14 @@ async fn crawl_bookmarks(
         }
 
         for illust in &illusts {
-            let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
+            let downloads = save_illust(
+                state,
+                illust,
+                job.illust_type_filter.clone(),
+                job.exclude_r18,
+                job.exclude_ai,
+            )
+            .await?;
             for dl in downloads {
                 let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
@@ -310,7 +398,17 @@ async fn crawl_bookmarks(
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
                 state
                     .queue_backend
-                    .push_task(&download_job, "download", metadata, &state.db, Some(parent_id), Some(parent_id), None, Some(dl.image_id), Some(&download_task_id))
+                    .push_task(
+                        &download_job,
+                        "download",
+                        metadata,
+                        &state.db,
+                        Some(parent_id),
+                        Some(parent_id),
+                        None,
+                        Some(dl.image_id),
+                        Some(&download_task_id),
+                    )
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }

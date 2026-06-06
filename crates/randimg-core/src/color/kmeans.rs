@@ -167,8 +167,13 @@ fn hamerly_assign(
 
     let pairwise_dists: Vec<f32> = (0..k)
         .flat_map(|i| {
-            (0..k)
-                .map(move |j| if i == j { 0.0 } else { hyab_dist(&centroids[i], &centroids[j]) })
+            (0..k).map(move |j| {
+                if i == j {
+                    0.0
+                } else {
+                    hyab_dist(&centroids[i], &centroids[j])
+                }
+            })
         })
         .collect();
 
@@ -179,47 +184,49 @@ fn hamerly_assign(
         .zip(bounds.upper.par_chunks_mut(chunk_size))
         .zip(bounds.lower.par_chunks_mut(chunk_size))
         .enumerate()
-        .map(|(_chunk_idx, (((data_chunk, assign_chunk), upper_chunk), lower_chunk))| {
-            let mut local_changed = false;
+        .map(
+            |(_chunk_idx, (((data_chunk, assign_chunk), upper_chunk), lower_chunk))| {
+                let mut local_changed = false;
 
-            for (i_local, point) in data_chunk.iter().enumerate() {
-                let assigned = assign_chunk[i_local];
+                for (i_local, point) in data_chunk.iter().enumerate() {
+                    let assigned = assign_chunk[i_local];
 
-                let min_dist_to_other = (0..k)
-                    .filter(|&j| j != assigned)
-                    .map(|j| pairwise_dists[assigned * k + j])
-                    .fold(f32::MAX, f32::min);
-                let p = 0.5 * min_dist_to_other;
+                    let min_dist_to_other = (0..k)
+                        .filter(|&j| j != assigned)
+                        .map(|j| pairwise_dists[assigned * k + j])
+                        .fold(f32::MAX, f32::min);
+                    let p = 0.5 * min_dist_to_other;
 
-                if upper_chunk[i_local] <= p {
-                    HAMERLY_SKIPS.fetch_add(1, Ordering::Relaxed);
-                    continue;
-                }
+                    if upper_chunk[i_local] <= p {
+                        HAMERLY_SKIPS.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
 
-                let mut min1 = f32::MAX;
-                let mut min2 = f32::MAX;
-                let mut best = 0;
-                for (j, c) in centroids.iter().enumerate() {
-                    let d = hyab_dist(point, c);
-                    if d < min1 {
-                        min2 = min1;
-                        min1 = d;
-                        best = j;
-                    } else if d < min2 {
-                        min2 = d;
+                    let mut min1 = f32::MAX;
+                    let mut min2 = f32::MAX;
+                    let mut best = 0;
+                    for (j, c) in centroids.iter().enumerate() {
+                        let d = hyab_dist(point, c);
+                        if d < min1 {
+                            min2 = min1;
+                            min1 = d;
+                            best = j;
+                        } else if d < min2 {
+                            min2 = d;
+                        }
+                    }
+
+                    upper_chunk[i_local] = min1;
+                    lower_chunk[i_local] = min2;
+
+                    if assign_chunk[i_local] != best {
+                        assign_chunk[i_local] = best;
+                        local_changed = true;
                     }
                 }
-
-                upper_chunk[i_local] = min1;
-                lower_chunk[i_local] = min2;
-
-                if assign_chunk[i_local] != best {
-                    assign_chunk[i_local] = best;
-                    local_changed = true;
-                }
-            }
-            local_changed
-        })
+                local_changed
+            },
+        )
         .reduce(|| false, |a, b| a || b);
 
     changed

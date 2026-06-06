@@ -202,7 +202,7 @@ pub async fn get_crawler_image(
                 image_path: img.image_path,
                 parent_job_id: None,
                 task_id: Some(task_id.clone()),
-                max_retries: 0,  // CPU-bound, no retry
+                max_retries: 0, // CPU-bound, no retry
                 backoff_base: state.config.task_backoff_base,
             };
             state
@@ -230,7 +230,8 @@ pub async fn get_crawler_image(
     }
 
     Err(AppError::BadRequest(
-        "Use ?init=true to submit color extraction jobs. Processing is automatic via fang workers.".into(),
+        "Use ?init=true to submit color extraction jobs. Processing is automatic via fang workers."
+            .into(),
     ))
 }
 

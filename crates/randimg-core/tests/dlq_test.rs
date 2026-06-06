@@ -1,7 +1,7 @@
 use migration::MigratorTrait;
+use randimg_core::db::entities::task_enum::{TaskStatus, TaskType};
 use sea_orm::{Database, DatabaseConnection};
 use serde_json::json;
-use randimg_core::db::entities::task_enum::{TaskStatus, TaskType};
 
 async fn setup_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
@@ -18,7 +18,13 @@ async fn test_dead_letter_insert_and_list() {
     let db = setup_db().await;
 
     let task = randimg_core::db::query::task::create(
-        &db, TaskType::Crawl, None, None, None, None, Some(json!({"target": "test"})),
+        &db,
+        TaskType::Crawl,
+        None,
+        None,
+        None,
+        None,
+        Some(json!({"target": "test"})),
     )
     .await
     .unwrap();
@@ -56,14 +62,16 @@ async fn test_dead_letter_insert_and_list() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, dl.id);
 
-    let filtered = randimg_core::db::query::dead_letter::list_dead_letters(&db, Some("download"), 10, 0)
-        .await
-        .unwrap();
+    let filtered =
+        randimg_core::db::query::dead_letter::list_dead_letters(&db, Some("download"), 10, 0)
+            .await
+            .unwrap();
     assert_eq!(filtered.len(), 0);
 
-    let by_type = randimg_core::db::query::dead_letter::list_dead_letters(&db, Some("crawl"), 10, 0)
-        .await
-        .unwrap();
+    let by_type =
+        randimg_core::db::query::dead_letter::list_dead_letters(&db, Some("crawl"), 10, 0)
+            .await
+            .unwrap();
     assert_eq!(by_type.len(), 1);
 
     let found = randimg_core::db::query::dead_letter::get_dead_letter(&db, &dl.id)
@@ -83,7 +91,13 @@ async fn test_dead_letter_requeue() {
     let db = setup_db().await;
 
     let task = randimg_core::db::query::task::create(
-        &db, TaskType::Download, None, None, None, None, Some(json!({"image_id": 42})),
+        &db,
+        TaskType::Download,
+        None,
+        None,
+        None,
+        None,
+        Some(json!({"image_id": 42})),
     )
     .await
     .unwrap();
@@ -125,11 +139,10 @@ async fn test_dead_letter_requeue() {
 async fn test_dead_letter_delete() {
     let db = setup_db().await;
 
-    let task = randimg_core::db::query::task::create(
-        &db, TaskType::Upload, None, None, None, None, None,
-    )
-    .await
-    .unwrap();
+    let task =
+        randimg_core::db::query::task::create(&db, TaskType::Upload, None, None, None, None, None)
+            .await
+            .unwrap();
 
     let dl = randimg_core::db::query::dead_letter::insert_dead_letter(
         &db, &task.id, "upload", None, "error", 3, None,

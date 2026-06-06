@@ -9,14 +9,24 @@ use super::helpers::{mark_downloaded, spawn_downstream_children};
 
 /// Download a single image from Pixiv to local disk.
 pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Result<(), String> {
-    let current_id = job.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let current_id = job
+        .task_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let file_path = format!("{}/{}", state.config.image_dir, job.image_path);
 
     // 1. Check if file already exists on disk
     if tokio::fs::metadata(&file_path).await.is_ok() {
-        tracing::info!("File already exists on disk, skipping download: {}", job.image_path);
+        tracing::info!(
+            "File already exists on disk, skipping download: {}",
+            job.image_path
+        );
         if let Err(e) = mark_downloaded(&state.db, job.image_id).await {
-            tracing::warn!(image_id = job.image_id, "Failed to mark as downloaded: {}", e);
+            tracing::warn!(
+                image_id = job.image_id,
+                "Failed to mark as downloaded: {}",
+                e
+            );
         }
 
         // ┌─────────────────────────────────────────────────────────────────────┐
@@ -74,7 +84,11 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
     // 2. Check DB downloaded flag — if true but file is missing, log warning and re-download
     {
         use crate::db::entities::image::Entity as Image;
-        if let Some(img) = Image::find_by_id(job.image_id).one(&state.db).await.map_err(|e| e.to_string())? {
+        if let Some(img) = Image::find_by_id(job.image_id)
+            .one(&state.db)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             if img.downloaded {
                 tracing::warn!(
                     image_id = job.image_id,
@@ -105,10 +119,8 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
             dir
         };
 
-        let dm = crate::pixiv::downloader::DownloadManager::new(
-            state.http_client.clone(),
-            &output_dir,
-        );
+        let dm =
+            crate::pixiv::downloader::DownloadManager::new(state.http_client.clone(), &output_dir);
         dm.download(&job.source_image_url, filename)
             .await
             .map_err(|e| format!("Download failed: {}", e))?;
@@ -118,7 +130,11 @@ pub async fn handle_download(job: DownloadJob, state: &Arc<WorkerState>) -> Resu
 
     // 4. Mark as downloaded in DB
     if let Err(e) = mark_downloaded(&state.db, job.image_id).await {
-        tracing::warn!(image_id = job.image_id, "Failed to mark as downloaded: {}", e);
+        tracing::warn!(
+            image_id = job.image_id,
+            "Failed to mark as downloaded: {}",
+            e
+        );
     }
 
     validate_and_update_dimensions(&state.db, &file_path, job.image_id).await?;
@@ -140,8 +156,8 @@ async fn validate_and_update_dimensions(
     let id = image_id;
 
     let dimensions = tokio::task::spawn_blocking(move || {
-        let img = ::image::open(&fp)
-            .map_err(|e| format!("Failed to open/validate image: {}", e))?;
+        let img =
+            ::image::open(&fp).map_err(|e| format!("Failed to open/validate image: {}", e))?;
         let (w, h) = (img.width() as i32, img.height() as i32);
         Ok::<_, String>((w, h))
     })

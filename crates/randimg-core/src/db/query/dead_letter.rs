@@ -27,9 +27,7 @@ pub async fn insert_dead_letter(
         params: Set(params.map(|v| v.to_string())),
         error_message: Set(error_message.to_string()),
         retry_count: Set(retry_count),
-        failure_history: Set(Some(
-            failure_history.unwrap_or_else(|| json!([])),
-        )),
+        failure_history: Set(Some(failure_history.unwrap_or_else(|| json!([])))),
         created_at: Set(now.into()),
     };
     model.insert(db).await
@@ -68,22 +66,24 @@ pub async fn requeue_dead_letter(
     let dl = DeadLetter::find_by_id(id.to_string())
         .one(db)
         .await?
-        .ok_or(DbErr::RecordNotFound(format!(
-            "Dead letter {id} not found"
-        )))?;
+        .ok_or(DbErr::RecordNotFound(format!("Dead letter {id} not found")))?;
 
     // Create a new task from the dead letter data
-    let task_type: crate::db::entities::task_enum::TaskType = dl.task_type.parse()
-        .map_err(|e: String| DbErr::Custom(format!("Invalid task type '{}': {}", dl.task_type, e)))?;
-    let params_json = dl.params.as_deref()
+    let task_type: crate::db::entities::task_enum::TaskType =
+        dl.task_type.parse().map_err(|e: String| {
+            DbErr::Custom(format!("Invalid task type '{}': {}", dl.task_type, e))
+        })?;
+    let params_json = dl
+        .params
+        .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
     let new_task = super::task::create(
         db,
         task_type,
-        None,  // parent_id: original parent may no longer exist
-        None,  // root_id
-        None,  // crawler_id
-        None,  // image_id
+        None, // parent_id: original parent may no longer exist
+        None, // root_id
+        None, // crawler_id
+        None, // image_id
         params_json,
     )
     .await?;

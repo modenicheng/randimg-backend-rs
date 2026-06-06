@@ -46,10 +46,7 @@ pub async fn count(
 }
 
 /// 按 ID 查找任务
-pub async fn find_by_id(
-    db: &DatabaseConnection,
-    id: &str,
-) -> Result<Option<task::Model>, DbErr> {
+pub async fn find_by_id(db: &DatabaseConnection, id: &str) -> Result<Option<task::Model>, DbErr> {
     Task::find_by_id(id.to_string()).one(db).await
 }
 
@@ -64,36 +61,39 @@ pub async fn delete_by_id(db: &DatabaseConnection, id: &str) -> Result<bool, DbE
 }
 
 /// 删除所有待处理任务（pending + queued）
+///
+/// Returns the count of deleted rows and their `fang_task_id` values.
 pub async fn delete_pending(
     db: &DatabaseConnection,
     task_type: Option<&TaskType>,
-) -> Result<u64, DbErr> {
-    delete_by_statuses(
-        db,
-        &[TaskStatus::Pending, TaskStatus::Queued],
-        task_type,
-    )
-    .await
+) -> Result<(u64, Vec<String>), DbErr> {
+    delete_by_statuses(db, &[TaskStatus::Pending, TaskStatus::Queued], task_type).await
 }
 
 /// 按状态删除任务，对根任务使用派生状态判断（避免删除有活跃子任务的根）。
+///
+/// Returns the number of rows deleted and the `fang_task_id` values of those
+/// rows so callers can remove only the matching Fang queue entries.
 pub async fn delete_by_statuses(
     db: &DatabaseConnection,
     statuses: &[TaskStatus],
     task_type: Option<&TaskType>,
-) -> Result<u64, DbErr> {
+) -> Result<(u64, Vec<String>), DbErr> {
     if statuses.is_empty() {
-        return Ok(0);
+        return Ok((0, Vec::new()));
     }
 
-    let status_values: Vec<String> = statuses.iter().map(|s| format!("'{}'", s.as_str())).collect();
+    let status_values: Vec<String> = statuses
+        .iter()
+        .map(|s| format!("'{}'", s.as_str()))
+        .collect();
     let status_list = status_values.join(",");
 
     let mut type_filter = String::new();
     let mut bind_values: Vec<Value> = Vec::new();
     if let Some(tt) = task_type {
         bind_values.push(Value::from(tt.as_str()));
-        type_filter = " AND t.task_type::text = $1".to_string();
+        type_filter = " AND task_type::text = $1".to_string();
     }
 
     let sql = format!(
@@ -142,23 +142,46 @@ pub async fn delete_by_statuses(
         "#
     );
 
+    // Collect fang_task_ids the DELETE will remove, so callers can purge
+    // only the matching Fang queue entries instead of sweeping all tasks.
+    let select_sql = sql.replacen("DELETE", "SELECT fang_task_id::text", 1);
+    let select_stmt =
+        Statement::from_sql_and_values(db.get_database_backend(), select_sql, bind_values.clone());
+    let fang_rows = db.query_all(select_stmt).await?;
+    let fang_task_ids: Vec<String> = fang_rows
+        .iter()
+        .filter_map(|row| row.try_get_by_index::<String>(0).ok())
+        .filter(|id| !id.is_empty())
+        .collect();
+
     let stmt = Statement::from_sql_and_values(db.get_database_backend(), sql, bind_values);
     let result = db.execute(stmt).await?;
 
-    Ok(result.rows_affected())
+    Ok((result.rows_affected(), fang_task_ids))
 }
 
 /// 按状态和 ID 列表批量删除任务
 ///
-/// 只删除同时匹配状态列表和 ID 列表的任务。返回删除的任务数量。
+/// 只删除同时匹配状态列表和 ID 列表的任务。
+/// Returns (deleted_count, fang_task_ids) for precise Fang queue cleanup.
 pub async fn delete_by_statuses_and_ids(
     db: &DatabaseConnection,
     statuses: &[TaskStatus],
     ids: &[String],
-) -> Result<u64, DbErr> {
+) -> Result<(u64, Vec<String>), DbErr> {
     if statuses.is_empty() || ids.is_empty() {
-        return Ok(0);
+        return Ok((0, Vec::new()));
     }
+
+    // Collect fang_task_ids before deleting
+    let fang_ids_raw: Vec<Option<String>> = Task::find()
+        .filter(task::Column::Status.is_in(statuses.iter().cloned()))
+        .filter(task::Column::Id.is_in(ids.iter().map(|s| s.as_str())))
+        .select_only()
+        .column(task::Column::FangTaskId)
+        .into_tuple()
+        .all(db)
+        .await?;
 
     let result = Task::delete_many()
         .filter(task::Column::Status.is_in(statuses.iter().cloned()))
@@ -166,7 +189,10 @@ pub async fn delete_by_statuses_and_ids(
         .exec(db)
         .await?;
 
-    Ok(result.rows_affected)
+    Ok((
+        result.rows_affected,
+        fang_ids_raw.into_iter().flatten().collect(),
+    ))
 }
 
 /// 更新任务状态
@@ -309,9 +335,7 @@ pub async fn link_fang_task(
 /// - running: tasks with status "running"
 /// - queued: tasks with status "pending" or "queued"
 /// - failed: tasks with status "failed" or "killed"
-pub async fn count_by_status(
-    db: &DatabaseConnection,
-) -> Result<(i64, i64, i64), DbErr> {
+pub async fn count_by_status(db: &DatabaseConnection) -> Result<(i64, i64, i64), DbErr> {
     let sql = r#"
         SELECT
             COUNT(CASE WHEN status = 'running' THEN 1 END) AS running_count,
@@ -366,10 +390,9 @@ pub async fn get_task_metrics(db: &DatabaseConnection) -> Result<TaskMetrics, Db
         FROM tasks
     "#;
     let stmt = Statement::from_sql_and_values(db.get_database_backend(), sql, []);
-    let row = db
-        .query_one(stmt)
-        .await?
-        .ok_or(DbErr::RecordNotFound("get_task_metrics returned no rows".to_string()))?;
+    let row = db.query_one(stmt).await?.ok_or(DbErr::RecordNotFound(
+        "get_task_metrics returned no rows".to_string(),
+    ))?;
 
     let total: i64 = row.try_get_by_index(0)?;
     let cnt_pending: i64 = row.try_get_by_index(1)?;

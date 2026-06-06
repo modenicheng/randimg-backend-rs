@@ -16,8 +16,8 @@ use randimg_core::db::entities::image::{self, Entity as Image};
 use randimg_core::db::entities::image_color_palette::{self, Entity as PaletteEntity};
 use sea_orm::*;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::sync::Semaphore;
 
@@ -30,16 +30,20 @@ async fn main() {
 
     dotenvy::dotenv().ok();
 
-    let db_url = std::env::var("API_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://localhost/randimg".into());
-    let image_dir =
-        std::env::var("IMAGE_DIR").unwrap_or_else(|_| "./images".into());
+    let db_url =
+        std::env::var("API_DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/randimg".into());
+    let image_dir = std::env::var("IMAGE_DIR").unwrap_or_else(|_| "./images".into());
     let concurrency: usize = std::env::var("CONCURRENCY")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(6);
 
-    tracing::info!(db_url, image_dir, concurrency, "Starting color recalculation");
+    tracing::info!(
+        db_url,
+        image_dir,
+        concurrency,
+        "Starting color recalculation"
+    );
 
     // 连接数据库
     let db = sea_orm::Database::connect(&db_url)
@@ -118,9 +122,7 @@ async fn main() {
             };
 
             // 提取颜色（CPU 密集，使用专用线程池）
-            let colors = color::run_on_color_pool(|| {
-                color::extract_theme_colors(&img_data)
-            });
+            let colors = color::run_on_color_pool(|| color::extract_theme_colors(&img_data));
 
             // 写入数据库
             if let Err(e) = update_colors_in_db(&db, img.id, &colors).await {

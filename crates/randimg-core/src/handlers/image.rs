@@ -110,12 +110,16 @@ async fn format_image_response(
     local: bool,
 ) -> Result<Response, AppError> {
     if local {
-        let path = img["image_path"].as_str().ok_or_else(|| AppError::Internal("Missing image_path".into()))?;
+        let path = img["image_path"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("Missing image_path".into()))?;
         return serve_local_image(state, path).await;
     }
 
     if format == "image" {
-        let src = img["src"].as_str().ok_or_else(|| AppError::Internal("Missing src".into()))?;
+        let src = img["src"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("Missing src".into()))?;
         Ok(Redirect::temporary(src).into_response())
     } else {
         Ok(Json(img).into_response())
@@ -152,7 +156,11 @@ fn parse_color_params(
 
     let max_dist = max_dist.unwrap_or(DEFAULT_MAX_DIST);
 
-    Some(ColorFilterParams { lab, mode, max_dist })
+    Some(ColorFilterParams {
+        lab,
+        mode,
+        max_dist,
+    })
 }
 
 /// GET /  Random image
@@ -168,9 +176,14 @@ pub async fn random_image(
     let height_ceil = query.height_ceil.unwrap_or(i32::MAX);
 
     let color_params = parse_color_params(
-        query.r, query.g, query.b,
-        query.l, query.a, query.b_lab,
-        query.mode, query.max_dist,
+        query.r,
+        query.g,
+        query.b,
+        query.l,
+        query.a,
+        query.b_lab,
+        query.mode,
+        query.max_dist,
     );
 
     let img = image::random_image(
@@ -267,9 +280,14 @@ pub async fn list_images(
     }
 
     let color_params = parse_color_params(
-        query.r, query.g, query.b,
-        query.l, query.a, query.b_lab,
-        query.mode, query.max_dist,
+        query.r,
+        query.g,
+        query.b,
+        query.l,
+        query.a,
+        query.b_lab,
+        query.mode,
+        query.max_dist,
     );
 
     let result = image::list_images(

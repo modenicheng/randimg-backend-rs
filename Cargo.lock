@@ -3998,6 +3998,7 @@ dependencies = [
  "migration",
  "mime_guess",
  "pixiv-client",
+ "rand 0.8.6",
  "rayon",
  "reqwest",
  "sea-orm",

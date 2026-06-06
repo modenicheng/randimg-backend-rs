@@ -56,22 +56,14 @@ impl fmt::Display for PixivError {
                 }
             }
             PixivError::Request {
-                message,
-                operation,
-                ..
+                message, operation, ..
             } => {
                 write!(f, "Pixiv {} request failed: {}", operation, message)
             }
             PixivError::Status {
-                status,
-                operation,
-                ..
+                status, operation, ..
             } => {
-                write!(
-                    f,
-                    "Pixiv {} returned error status: {}",
-                    operation, status
-                )
+                write!(f, "Pixiv {} returned error status: {}", operation, status)
             }
             PixivError::Persistence {
                 message,
@@ -117,10 +109,7 @@ impl PixivError {
     }
 
     /// Create an auth error from a source error
-    pub fn auth_from_source(
-        source: pixiv_client::PixivError,
-        credential_id: Option<i32>,
-    ) -> Self {
+    pub fn auth_from_source(source: pixiv_client::PixivError, credential_id: Option<i32>) -> Self {
         PixivError::Auth {
             message: source.to_string(),
             credential_id,
@@ -200,9 +189,7 @@ impl From<pixiv_client::PixivError> for PixivError {
     fn from(err: pixiv_client::PixivError) -> Self {
         match &err {
             pixiv_client::PixivError::Auth(_) => PixivError::auth_from_source(err, None),
-            pixiv_client::PixivError::Status(status) => {
-                PixivError::status(*status, "unknown", err)
-            }
+            pixiv_client::PixivError::Status(status) => PixivError::status(*status, "unknown", err),
             _ => PixivError::request("unknown", err),
         }
     }

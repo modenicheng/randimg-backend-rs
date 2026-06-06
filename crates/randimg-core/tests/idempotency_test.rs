@@ -16,8 +16,7 @@ use randimg_core::task_queue::jobs::{AccessibilityCheckJob, ColorExtractJob, Upl
 
 fn db_url() -> String {
     let _ = dotenvy::dotenv();
-    std::env::var("API_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://localhost/randimg".into())
+    std::env::var("API_DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/randimg".into())
 }
 
 async fn setup_db() -> DatabaseConnection {
@@ -106,9 +105,10 @@ async fn create_image_with_author(
     db: &DatabaseConnection,
     title: &str,
 ) -> randimg_core::db::entities::image::Model {
-    let author = randimg_core::db::query::author::find_or_create(db, "TestArtist", Some("pixiv"), Some("1"))
-        .await
-        .unwrap();
+    let author =
+        randimg_core::db::query::author::find_or_create(db, "TestArtist", Some("pixiv"), Some("1"))
+            .await
+            .unwrap();
     let data = serde_json::json!({
         "title": title,
         "image_path": format!("{}.jpg", title),
@@ -150,7 +150,10 @@ async fn test_upload_skips_if_already_public() {
     };
 
     let result = randimg_core::task_queue::handlers::handle_upload(job, &state).await;
-    assert!(result.is_ok(), "handle_upload should return Ok for already-uploaded image");
+    assert!(
+        result.is_ok(),
+        "handle_upload should return Ok for already-uploaded image"
+    );
 }
 
 #[tokio::test]
@@ -179,7 +182,10 @@ async fn test_color_extract_skips_if_colors_exist() {
     };
 
     let result = randimg_core::task_queue::handlers::handle_color_extract(job, &state).await;
-    assert!(result.is_ok(), "handle_color_extract should return Ok for image with existing colors");
+    assert!(
+        result.is_ok(),
+        "handle_color_extract should return Ok for image with existing colors"
+    );
 }
 
 #[tokio::test]
@@ -207,8 +213,7 @@ async fn test_accessibility_check_skips_if_accessible_set() {
         backoff_base: 2,
     };
 
-    let result =
-        randimg_core::task_queue::handlers::handle_accessibility_check(job, &state).await;
+    let result = randimg_core::task_queue::handlers::handle_accessibility_check(job, &state).await;
     assert!(
         result.is_ok(),
         "handle_accessibility_check should return Ok for already-checked image"

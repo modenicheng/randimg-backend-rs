@@ -51,7 +51,12 @@ async fn main() {
         let file_path = image_dir.join(&img.image_path);
 
         if dry_run {
-            println!("{} DB#{} {} — 会删除", progress, img.id, file_path.display());
+            println!(
+                "{} DB#{} {} — 会删除",
+                progress,
+                img.id,
+                file_path.display()
+            );
             continue;
         }
 

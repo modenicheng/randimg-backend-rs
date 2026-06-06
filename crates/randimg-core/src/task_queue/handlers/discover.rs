@@ -11,7 +11,10 @@ use super::helpers::save_illust;
 
 /// Discover related illustrations via Pixiv related-illust API.
 pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Result<(), String> {
-    let current_id = job.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let current_id = job
+        .task_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let hop = job.hop;
     let max_hops = job.max_hops.unwrap_or(state.config.max_discover_hops);
@@ -55,24 +58,31 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
                 .map_err(|e| format!("Failed to fetch credentials by IDs: {}", e))?;
             if creds.is_empty() {
                 return Err(format!(
-                    "No active credentials found among specified IDs: {:?}", ids
+                    "No active credentials found among specified IDs: {:?}",
+                    ids
                 ));
             }
             let cred = creds.into_iter().next().unwrap();
-            crate::pixiv::auth_with_credential(&api, &cred, &state.db).await.map_err(|e| e.to_string())?
+            crate::pixiv::auth_with_credential(&api, &cred, &state.db)
+                .await
+                .map_err(|e| e.to_string())?
         } else {
             let cred = query::pixiv_credential::find_one_active_random(&state.db)
                 .await
                 .map_err(|e| format!("Failed to fetch credential: {}", e))?
                 .ok_or("No active Pixiv credentials found")?;
-            crate::pixiv::auth_with_credential(&api, &cred, &state.db).await.map_err(|e| e.to_string())?
+            crate::pixiv::auth_with_credential(&api, &cred, &state.db)
+                .await
+                .map_err(|e| e.to_string())?
         }
     } else {
         let cred = query::pixiv_credential::find_one_active_random(&state.db)
             .await
             .map_err(|e| format!("Failed to fetch credential: {}", e))?
             .ok_or("No active Pixiv credentials found")?;
-        crate::pixiv::auth_with_credential(&api, &cred, &state.db).await.map_err(|e| e.to_string())?
+        crate::pixiv::auth_with_credential(&api, &cred, &state.db)
+            .await
+            .map_err(|e| e.to_string())?
     };
 
     let mut total_discovered = 0u32;
@@ -85,9 +95,18 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
             "illust_related",
             state.config.auth_max_retries,
             state.config.auth_backoff_base_ms,
-            || async { api.illust_related(source_id as u64).await.map_err(|e| e.to_string()) },
-            || async { crate::pixiv::recover_auth(&api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
-        ).await?;
+            || async {
+                api.illust_related(source_id as u64)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            || async {
+                crate::pixiv::recover_auth(&api, credential_id, &state.db)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+        )
+        .await?;
 
         let data = resp.data.ok_or("No data in illust_related response")?;
 
@@ -106,7 +125,14 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
                 }
             }
 
-            let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
+            let downloads = save_illust(
+                state,
+                illust,
+                job.illust_type_filter.clone(),
+                job.exclude_r18,
+                job.exclude_ai,
+            )
+            .await?;
             for dl in downloads {
                 let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
@@ -123,7 +149,17 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
                     .map_err(|e| format!("Failed to serialize download job: {}", e))?;
                 state
                     .queue_backend
-                    .push_task(&download_job, "download", metadata, &state.db, Some(&current_id), Some(&current_id), None, Some(dl.image_id), Some(&download_task_id))
+                    .push_task(
+                        &download_job,
+                        "download",
+                        metadata,
+                        &state.db,
+                        Some(&current_id),
+                        Some(&current_id),
+                        None,
+                        Some(dl.image_id),
+                        Some(&download_task_id),
+                    )
                     .await
                     .map_err(|e| format!("Failed to submit download task: {}", e))?;
             }
@@ -155,7 +191,17 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
             .map_err(|e| format!("Failed to serialize discover job: {}", e))?;
         state
             .queue_backend
-            .push_task(&next_discover_job, "discover", metadata, &state.db, Some(&current_id), Some(&current_id), None, None, Some(&next_discover_task_id))
+            .push_task(
+                &next_discover_job,
+                "discover",
+                metadata,
+                &state.db,
+                Some(&current_id),
+                Some(&current_id),
+                None,
+                None,
+                Some(&next_discover_task_id),
+            )
             .await
             .map_err(|e| format!("Failed to submit next discover task: {}", e))?;
 

@@ -50,9 +50,9 @@ pub async fn spawn_workers(
     state: Arc<WorkerState>,
     worker_handle: tokio::runtime::Handle,
 ) -> Vec<tokio::task::JoinHandle<()>> {
+    use fang::SleepParams;
     use fang::asynk::async_queue::AsyncQueue;
     use fang::asynk::async_worker_pool::AsyncWorkerPool;
-    use fang::SleepParams;
 
     // Initialize the global WorkerState so AsyncRunnable::run() can access it
     task_queue::jobs::init_worker_state(state.clone()).await;
@@ -72,9 +72,15 @@ pub async fn spawn_workers(
         ("download", state.config.task_concurrency_download),
         ("color_extract", state.config.task_concurrency_color_extract),
         ("upload", state.config.task_concurrency_upload),
-        ("accessibility_check", state.config.task_concurrency_accessibility_check),
+        (
+            "accessibility_check",
+            state.config.task_concurrency_accessibility_check,
+        ),
         ("discover", state.config.task_concurrency_discover),
-        ("refresh_pixiv_token", state.config.task_concurrency_refresh_pixiv_token),
+        (
+            "refresh_pixiv_token",
+            state.config.task_concurrency_refresh_pixiv_token,
+        ),
         ("cleanup", state.config.task_concurrency_cleanup),
     ];
 
@@ -87,11 +93,7 @@ pub async fn spawn_workers(
             .retention_mode(fang::RetentionMode::KeepAll)
             .build();
 
-        tracing::info!(
-            task_type,
-            concurrency,
-            "Spawning fang worker pool"
-        );
+        tracing::info!(task_type, concurrency, "Spawning fang worker pool");
 
         let handle = worker_handle.spawn(async move {
             pool.start().await;

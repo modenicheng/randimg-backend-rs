@@ -60,7 +60,11 @@ fn main() {
 
     let t0 = Instant::now();
     let max_dim = w.max(h) as f64;
-    let scale = if max_dim > 1024.0 { 1024.0 / max_dim } else { 0.5 };
+    let scale = if max_dim > 1024.0 {
+        1024.0 / max_dim
+    } else {
+        0.5
+    };
     let new_w = ((w as f64 * scale) as u32).max(1);
     let new_h = ((h as f64 * scale) as u32).max(1);
     let small = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
@@ -87,7 +91,8 @@ fn main() {
     );
 
     let t2 = Instant::now();
-    let (_centroids, _counts) = randimg_core::color::kmeans::kmeans(&lab_pixels, 10, 50, None, false);
+    let (_centroids, _counts) =
+        randimg_core::color::kmeans::kmeans(&lab_pixels, 10, 50, None, false);
     let kmeans_elapsed = t2.elapsed();
     println!("  KMeans (k=10, batch=2048, 50 iter): {:?}", kmeans_elapsed);
 
