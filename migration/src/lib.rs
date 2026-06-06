@@ -21,6 +21,7 @@ mod m20260605_005_add_task_progress;
 mod m20260605_006_params_text_to_jsonb;
 mod m20260605_007_add_enum_types;
 mod m20260606_000001_add_unique_tag_name;
+mod m20260606_000002_json_to_jsonb;
 
 pub struct Migrator;
 
@@ -49,6 +50,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260605_006_params_text_to_jsonb::Migration),
             Box::new(m20260605_007_add_enum_types::Migration),
             Box::new(m20260606_000001_add_unique_tag_name::Migration),
+            Box::new(m20260606_000002_json_to_jsonb::Migration),
         ]
     }
 }
