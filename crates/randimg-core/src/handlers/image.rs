@@ -129,6 +129,11 @@ fn parse_color_params(
 ) -> Option<ColorFilterParams> {
     use crate::db::query::image::DEFAULT_MAX_DIST;
 
+    // rgb and lab are mutually exclusive
+    if rgb.is_some() && lab.is_some() {
+        return None;
+    }
+
     let lab_color = if let Some(ref rgb_str) = rgb {
         let parts: Vec<&str> = rgb_str.split(',').collect();
         if parts.len() != 3 {
@@ -386,6 +391,13 @@ pub async fn color_search(
     State(state): State<Arc<WorkerState>>,
     Query(query): Query<ColorSearchQuery>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    // rgb and lab are mutually exclusive
+    if query.rgb.is_some() && query.lab.is_some() {
+        return Err(AppError::BadRequest(
+            "Provide either rgb or lab, not both".into(),
+        ));
+    }
+
     let lab_color = if let Some(ref rgb_str) = query.rgb {
         let parts: Vec<&str> = rgb_str.split(',').collect();
         if parts.len() != 3 {
