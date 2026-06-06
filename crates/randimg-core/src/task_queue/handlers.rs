@@ -370,7 +370,7 @@ async fn save_illust(
 
     // Filter out AI-generated content if requested
     if exclude_ai.unwrap_or(false) {
-        if illust.illust_ai_type.unwrap_or(0) > 0 {
+        if illust.illust_ai_type.unwrap_or(0) >= 2 {
             tracing::debug!("Skipping AI illust {} (illust_ai_type={})", illust.id, illust.illust_ai_type.unwrap_or(0));
             return Ok(Vec::new());
         }

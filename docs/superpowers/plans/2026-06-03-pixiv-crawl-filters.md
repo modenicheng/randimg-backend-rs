@@ -49,7 +49,7 @@ impl MigrationTrait for Migration {
         // x_restrict: 0 = safe, 1 = R18, 2 = R18G
         db.execute_unprepared("ALTER TABLE images ADD COLUMN x_restrict INTEGER NOT NULL DEFAULT 0")
             .await?;
-        // illust_ai_type: 0 = non-AI, 1 = AI-generated, 2 = AI-assisted
+        // illust_ai_type: 0 = unset/unknown/legacy, 1 = non-AI, 2 = AI-generated
         db.execute_unprepared("ALTER TABLE images ADD COLUMN illust_ai_type INTEGER NOT NULL DEFAULT 0")
             .await?;
         Ok(())

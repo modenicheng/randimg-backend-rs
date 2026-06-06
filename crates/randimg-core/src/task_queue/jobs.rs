@@ -225,7 +225,7 @@ pub struct CrawlJob {
     /// Exclude R18 content (x_restrict > 0). Default: false.
     #[serde(default)]
     pub exclude_r18: Option<bool>,
-    /// Exclude AI-generated content (illust_ai_type > 0). Default: false.
+    /// Exclude AI-generated content (illust_ai_type >= 2). Default: false.
     #[serde(default)]
     pub exclude_ai: Option<bool>,
     /// Maximum total pages to crawl (0 or None = unlimited).
@@ -372,7 +372,7 @@ pub struct DiscoverJob {
     /// Exclude R18 content (x_restrict > 0). Inherited from the parent CrawlJob.
     #[serde(default)]
     pub exclude_r18: Option<bool>,
-    /// Exclude AI-generated content (illust_ai_type > 0). Inherited from the parent CrawlJob.
+    /// Exclude AI-generated content (illust_ai_type >= 2). Inherited from the parent CrawlJob.
     #[serde(default)]
     pub exclude_ai: Option<bool>,
     /// Maximum retry attempts (0 = no retry). Populated from AppConfig.

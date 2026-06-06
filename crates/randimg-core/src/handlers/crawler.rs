@@ -42,7 +42,7 @@ pub struct CreateCrawlerRequest {
     pub illust_type_filter: Option<Vec<String>>,
     /// Exclude R18 content (x_restrict > 0). Default: false.
     pub exclude_r18: Option<bool>,
-    /// Exclude AI-generated content (illust_ai_type > 0). Default: false.
+    /// Exclude AI-generated content (illust_ai_type >= 2). Default: false.
     pub exclude_ai: Option<bool>,
     /// Maximum total pages to crawl per run (0 = unlimited). Default: unlimited.
     pub max_pages: Option<u32>,
