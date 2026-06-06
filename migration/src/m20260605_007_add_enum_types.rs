@@ -30,9 +30,7 @@ impl MigrationTrait for Migration {
         // change type, then re-set DEFAULT with explicit ENUM cast.
         manager
             .get_connection()
-            .execute_unprepared(
-                "ALTER TABLE tasks ALTER COLUMN status DROP DEFAULT",
-            )
+            .execute_unprepared("ALTER TABLE tasks ALTER COLUMN status DROP DEFAULT")
             .await?;
 
         manager
@@ -51,9 +49,7 @@ impl MigrationTrait for Migration {
 
         manager
             .get_connection()
-            .execute_unprepared(
-                "ALTER TABLE tasks ALTER COLUMN task_type DROP DEFAULT",
-            )
+            .execute_unprepared("ALTER TABLE tasks ALTER COLUMN task_type DROP DEFAULT")
             .await?;
 
         manager

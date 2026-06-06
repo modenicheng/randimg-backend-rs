@@ -115,8 +115,8 @@ async fn main() {
             .await
             .unwrap_or_default();
         if existing.is_empty() {
-                match query::pixiv_credential::create(
-                    &state.worker.db,
+            match query::pixiv_credential::create(
+                &state.worker.db,
                 "env_default",
                 &config.pixiv_refresh_token,
                 Some("Seeded from PIXIV_REFRESH_TOKEN env var"),
@@ -193,7 +193,8 @@ async fn main() {
     } else {
         "in-process"
     };
-    let routes_list = "health, image, auth, tag, statistic, author, crawler, task, pixiv_credential";
+    let routes_list =
+        "health, image, auth, tag, statistic, author, crawler, task, pixiv_credential";
 
     // Mask password in database URLs for logging
     let masked_api_db = mask_database_url(&config.api_database_url);
@@ -208,7 +209,10 @@ async fn main() {
          Log Dir     : {}\n\
          Routes      : {routes_list}\n\
          Starting HTTP server…",
-        env!("CARGO_PKG_VERSION"), masked_api_db, config.log_level, config.log_dir,
+        env!("CARGO_PKG_VERSION"),
+        masked_api_db,
+        config.log_level,
+        config.log_dir,
     );
 
     let cors = if state.worker.config.cors_origins == "*" {

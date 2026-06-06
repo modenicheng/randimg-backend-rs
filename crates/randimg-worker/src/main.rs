@@ -95,18 +95,21 @@ async fn main() {
     // 10. Reset stale running tasks from previous crash
     {
         let stale_timeout = config.task_default_timeout_secs * 2;
-        match randimg_core::db::query::task::reset_stale_running_tasks(&state.db, stale_timeout).await {
+        match randimg_core::db::query::task::reset_stale_running_tasks(&state.db, stale_timeout)
+            .await
+        {
             Ok(0) => {}
-            Ok(n) => tracing::warn!(count = n, stale_timeout_secs = stale_timeout, "Reset stale running tasks from previous run"),
+            Ok(n) => tracing::warn!(
+                count = n,
+                stale_timeout_secs = stale_timeout,
+                "Reset stale running tasks from previous run"
+            ),
             Err(e) => tracing::error!(error = %e, "Failed to reset stale running tasks"),
         }
     }
 
-    let handles = randimg_core::spawn_workers(
-        state.clone(),
-        tokio::runtime::Handle::current(),
-    )
-    .await;
+    let handles =
+        randimg_core::spawn_workers(state.clone(), tokio::runtime::Handle::current()).await;
 
     let worker_handles = Arc::new(Mutex::new(handles));
     tracing::info!(
@@ -115,10 +118,8 @@ async fn main() {
     );
 
     // 10. Spawn watchdog
-    let watchdog_handle = randimg_core::watchdog::spawn_watchdog(
-        state.clone(),
-        shutdown_token.clone(),
-    );
+    let watchdog_handle =
+        randimg_core::watchdog::spawn_watchdog(state.clone(), shutdown_token.clone());
     tracing::info!("Watchdog spawned");
 
     // 11. Spawn health check HTTP server
@@ -187,10 +188,7 @@ async fn main() {
     }
 
     if all_done {
-        tracing::info!(
-            count = worker_count,
-            "All workers finished gracefully"
-        );
+        tracing::info!(count = worker_count, "All workers finished gracefully");
     } else {
         tracing::warn!(
             total = worker_count,
@@ -207,8 +205,8 @@ async fn main() {
 /// Logs always go to stdout (compact). When `log_dir` is non-empty, logs are also
 /// written to `{log_dir}/worker.log` as JSON (daily rotation).
 fn init_logging(config: &AppConfig) -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
     let stdout_layer = tracing_subscriber::fmt::layer()
         .with_file(true)

@@ -52,20 +52,16 @@ END $$;
         .await?;
 
         // Add UNIQUE constraint on tags.name
-        db.execute_unprepared(
-            "ALTER TABLE tags ADD CONSTRAINT uq_tags_name UNIQUE (name)",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE tags ADD CONSTRAINT uq_tags_name UNIQUE (name)")
+            .await?;
 
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        db.execute_unprepared(
-            "ALTER TABLE tags DROP CONSTRAINT IF EXISTS uq_tags_name",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE tags DROP CONSTRAINT IF EXISTS uq_tags_name")
+            .await?;
         Ok(())
     }
 }

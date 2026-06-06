@@ -9,17 +9,14 @@ impl MigrationTrait for Migration {
         let db = manager.get_connection();
 
         // ========== 1. images 表新增主色 LAB 字段 ==========
-        db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN primary_l DOUBLE PRECISION"
-        ).await?;
+        db.execute_unprepared("ALTER TABLE images ADD COLUMN primary_l DOUBLE PRECISION")
+            .await?;
 
-        db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN primary_a DOUBLE PRECISION"
-        ).await?;
+        db.execute_unprepared("ALTER TABLE images ADD COLUMN primary_a DOUBLE PRECISION")
+            .await?;
 
-        db.execute_unprepared(
-            "ALTER TABLE images ADD COLUMN primary_b DOUBLE PRECISION"
-        ).await?;
+        db.execute_unprepared("ALTER TABLE images ADD COLUMN primary_b DOUBLE PRECISION")
+            .await?;
 
         // 回填已有数据：从 colors JSON 中提取 primary_color 并转换为 LAB
         // 注意：这里只做 RGB 存储，LAB 需要应用层计算（SQL 没有 sRGB->LAB 函数）
@@ -31,9 +28,23 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(ImageColorPalette::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(ImageColorPalette::Id).integer().not_null().auto_increment().primary_key())
-                    .col(ColumnDef::new(ImageColorPalette::ImageId).integer().not_null())
-                    .col(ColumnDef::new(ImageColorPalette::ColorIndex).integer().not_null())
+                    .col(
+                        ColumnDef::new(ImageColorPalette::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ImageColorPalette::ImageId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ImageColorPalette::ColorIndex)
+                            .integer()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(ImageColorPalette::RgbR).integer().not_null())
                     .col(ColumnDef::new(ImageColorPalette::RgbG).integer().not_null())
                     .col(ColumnDef::new(ImageColorPalette::RgbB).integer().not_null())
@@ -91,12 +102,20 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(ImageColorPalette::Table).to_owned()).await?;
+        manager
+            .drop_table(Table::drop().table(ImageColorPalette::Table).to_owned())
+            .await?;
 
         let db = manager.get_connection();
-        let _ = db.execute_unprepared("ALTER TABLE images DROP COLUMN primary_l").await;
-        let _ = db.execute_unprepared("ALTER TABLE images DROP COLUMN primary_a").await;
-        let _ = db.execute_unprepared("ALTER TABLE images DROP COLUMN primary_b").await;
+        let _ = db
+            .execute_unprepared("ALTER TABLE images DROP COLUMN primary_l")
+            .await;
+        let _ = db
+            .execute_unprepared("ALTER TABLE images DROP COLUMN primary_a")
+            .await;
+        let _ = db
+            .execute_unprepared("ALTER TABLE images DROP COLUMN primary_b")
+            .await;
 
         Ok(())
     }
@@ -104,12 +123,21 @@ impl MigrationTrait for Migration {
 
 #[derive(DeriveIden)]
 enum Images {
-    Table, Id, PrimaryL,
+    Table,
+    Id,
+    PrimaryL,
 }
 
 #[derive(DeriveIden)]
 enum ImageColorPalette {
-    Table, Id, ImageId, ColorIndex,
-    RgbR, RgbG, RgbB,
-    LabL, LabA, LabB,
+    Table,
+    Id,
+    ImageId,
+    ColorIndex,
+    RgbR,
+    RgbG,
+    RgbB,
+    LabL,
+    LabA,
+    LabB,
 }

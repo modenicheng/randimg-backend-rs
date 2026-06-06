@@ -43,12 +43,8 @@ pub struct RandomQuery {
     pub author: Option<String>,
     pub tags: Option<String>,
     // Color filter
-    pub r: Option<u8>,
-    pub g: Option<u8>,
-    pub b: Option<u8>,
-    pub l: Option<f64>,
-    pub a: Option<f64>,
-    pub b_lab: Option<f64>,
+    pub rgb: Option<String>,
+    pub lab: Option<String>,
     pub mode: Option<String>,
     pub max_dist: Option<f64>,
 }
@@ -69,12 +65,8 @@ pub struct ListQuery {
     pub accessible: Option<String>,
     pub tags: Option<String>,
     // Color filter
-    pub r: Option<u8>,
-    pub g: Option<u8>,
-    pub b: Option<u8>,
-    pub l: Option<f64>,
-    pub a: Option<f64>,
-    pub b_lab: Option<f64>,
+    pub rgb: Option<String>,
+    pub lab: Option<String>,
     pub mode: Option<String>,
     pub max_dist: Option<f64>,
 }
@@ -127,23 +119,34 @@ async fn format_image_response(
 }
 
 /// Parse color filter params from query, converting RGB to LAB if needed.
+/// Accepts comma-separated strings: `rgb=r,g,b` or `lab=l,a,b`.
 /// Returns `ColorFilterParams` or `None` if no valid color input.
 fn parse_color_params(
-    r: Option<u8>,
-    g: Option<u8>,
-    b: Option<u8>,
-    l: Option<f64>,
-    a: Option<f64>,
-    b_lab: Option<f64>,
+    rgb: Option<String>,
+    lab: Option<String>,
     mode: Option<String>,
     max_dist: Option<f64>,
 ) -> Option<ColorFilterParams> {
     use crate::db::query::image::DEFAULT_MAX_DIST;
 
-    let lab = if let (Some(r), Some(g), Some(b)) = (r, g, b) {
+    let lab_color = if let Some(ref rgb_str) = rgb {
+        let parts: Vec<&str> = rgb_str.split(',').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let r: u8 = parts[0].trim().parse().ok()?;
+        let g: u8 = parts[1].trim().parse().ok()?;
+        let b: u8 = parts[2].trim().parse().ok()?;
         let lab = crate::color::rgb_to_lab(r, g, b);
         [lab[0] as f64, lab[1] as f64, lab[2] as f64]
-    } else if let (Some(l), Some(a), Some(b_lab)) = (l, a, b_lab) {
+    } else if let Some(ref lab_str) = lab {
+        let parts: Vec<&str> = lab_str.split(',').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let l: f64 = parts[0].trim().parse().ok()?;
+        let a: f64 = parts[1].trim().parse().ok()?;
+        let b_lab: f64 = parts[2].trim().parse().ok()?;
         [l, a, b_lab]
     } else {
         return None;
@@ -157,7 +160,7 @@ fn parse_color_params(
     let max_dist = max_dist.unwrap_or(DEFAULT_MAX_DIST);
 
     Some(ColorFilterParams {
-        lab,
+        lab: lab_color,
         mode,
         max_dist,
     })
@@ -175,16 +178,7 @@ pub async fn random_image(
     let height_floor = query.height_floor.unwrap_or(0);
     let height_ceil = query.height_ceil.unwrap_or(i32::MAX);
 
-    let color_params = parse_color_params(
-        query.r,
-        query.g,
-        query.b,
-        query.l,
-        query.a,
-        query.b_lab,
-        query.mode,
-        query.max_dist,
-    );
+    let color_params = parse_color_params(query.rgb, query.lab, query.mode, query.max_dist);
 
     let img = image::random_image(
         &state.db,
@@ -279,16 +273,7 @@ pub async fn list_images(
         )));
     }
 
-    let color_params = parse_color_params(
-        query.r,
-        query.g,
-        query.b,
-        query.l,
-        query.a,
-        query.b_lab,
-        query.mode,
-        query.max_dist,
-    );
+    let color_params = parse_color_params(query.rgb, query.lab, query.mode, query.max_dist);
 
     let result = image::list_images(
         &state.db,
@@ -384,12 +369,8 @@ pub async fn patch_image(
 
 #[derive(Deserialize)]
 pub struct ColorSearchQuery {
-    pub r: Option<u8>,
-    pub g: Option<u8>,
-    pub b: Option<u8>,
-    pub l: Option<f64>,
-    pub a: Option<f64>,
-    pub b_lab: Option<f64>,
+    pub rgb: Option<String>,
+    pub lab: Option<String>,
     pub mode: Option<String>,
     pub max_dist: Option<f64>,
     pub limit: Option<u64>,
@@ -397,7 +378,7 @@ pub struct ColorSearchQuery {
 
 /// GET /color/search  Search images by color similarity in LAB space
 ///
-/// Accepts either RGB (r,g,b query params) or LAB (l,a,b_lab query params).
+/// Accepts either RGB (?rgb=255,0,0) or LAB (?lab=50,0,0) comma-separated query params.
 /// mode: "primary" (default) or "palette"
 /// max_dist: optional squared distance cutoff
 /// limit: max results (default 20, max 100)
@@ -405,15 +386,50 @@ pub async fn color_search(
     State(state): State<Arc<WorkerState>>,
     Query(query): Query<ColorSearchQuery>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    // Convert RGB to LAB if provided, otherwise use LAB directly
-    let lab = if let (Some(r), Some(g), Some(b)) = (query.r, query.g, query.b) {
+    let lab_color = if let Some(ref rgb_str) = query.rgb {
+        let parts: Vec<&str> = rgb_str.split(',').collect();
+        if parts.len() != 3 {
+            return Err(AppError::BadRequest(
+                "Invalid rgb format. Use rgb=r,g,b with three comma-separated values".into(),
+            ));
+        }
+        let r: u8 = parts[0]
+            .trim()
+            .parse()
+            .map_err(|_| AppError::BadRequest("Invalid red value in rgb parameter".into()))?;
+        let g: u8 = parts[1]
+            .trim()
+            .parse()
+            .map_err(|_| AppError::BadRequest("Invalid green value in rgb parameter".into()))?;
+        let b: u8 = parts[2]
+            .trim()
+            .parse()
+            .map_err(|_| AppError::BadRequest("Invalid blue value in rgb parameter".into()))?;
         let lab = crate::color::rgb_to_lab(r, g, b);
         [lab[0] as f64, lab[1] as f64, lab[2] as f64]
-    } else if let (Some(l), Some(a), Some(b_lab)) = (query.l, query.a, query.b_lab) {
+    } else if let Some(ref lab_str) = query.lab {
+        let parts: Vec<&str> = lab_str.split(',').collect();
+        if parts.len() != 3 {
+            return Err(AppError::BadRequest(
+                "Invalid lab format. Use lab=l,a,b with three comma-separated values".into(),
+            ));
+        }
+        let l: f64 = parts[0]
+            .trim()
+            .parse()
+            .map_err(|_| AppError::BadRequest("Invalid L value in lab parameter".into()))?;
+        let a: f64 = parts[1]
+            .trim()
+            .parse()
+            .map_err(|_| AppError::BadRequest("Invalid A value in lab parameter".into()))?;
+        let b_lab: f64 = parts[2]
+            .trim()
+            .parse()
+            .map_err(|_| AppError::BadRequest("Invalid B value in lab parameter".into()))?;
         [l, a, b_lab]
     } else {
         return Err(AppError::BadRequest(
-            "Provide either r,g,b or l,a,b_lab query parameters".into(),
+            "Provide either rgb=r,g,b or lab=l,a,b query parameters".into(),
         ));
     };
 
@@ -426,9 +442,16 @@ pub async fn color_search(
 
     let limit = query.limit.unwrap_or(20).min(100);
 
-    let results = image::color_search(&state.db, lab, mode, query.max_dist, limit, &state.config)
-        .await
-        .map_err(AppError::from)?;
+    let results = image::color_search(
+        &state.db,
+        lab_color,
+        mode,
+        query.max_dist,
+        limit,
+        &state.config,
+    )
+    .await
+    .map_err(AppError::from)?;
 
     Ok(Json(results))
 }

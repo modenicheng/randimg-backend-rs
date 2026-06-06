@@ -31,10 +31,8 @@ impl MigrationTrait for Migration {
             .await?;
 
         // Convert JSONB back to TEXT
-        db.execute_unprepared(
-            "ALTER TABLE tasks ALTER COLUMN params TYPE text USING params::text",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE tasks ALTER COLUMN params TYPE text USING params::text")
+            .await?;
 
         Ok(())
     }

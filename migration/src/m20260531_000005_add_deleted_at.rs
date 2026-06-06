@@ -14,7 +14,8 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        let _ = db.execute_unprepared("ALTER TABLE images DROP COLUMN deleted_at")
+        let _ = db
+            .execute_unprepared("ALTER TABLE images DROP COLUMN deleted_at")
             .await;
         Ok(())
     }

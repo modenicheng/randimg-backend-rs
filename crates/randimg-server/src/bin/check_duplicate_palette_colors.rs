@@ -36,7 +36,10 @@ async fn main() {
         .await
         .expect("Failed to query palette entries");
 
-    tracing::info!(total_entries = all_palettes.len(), "Fetched palette entries");
+    tracing::info!(
+        total_entries = all_palettes.len(),
+        "Fetched palette entries"
+    );
 
     // Group by image_id
     let mut by_image: HashMap<i32, Vec<&image_color_palette::Model>> = HashMap::new();
@@ -87,7 +90,11 @@ async fn main() {
         images_with_duplicates.sort_by_key(|(id, _)| *id);
 
         for (image_id, duplicates) in &images_with_duplicates {
-            println!("Image ID {}: {} duplicate color(s)", image_id, duplicates.len());
+            println!(
+                "Image ID {}: {} duplicate color(s)",
+                image_id,
+                duplicates.len()
+            );
             for (r, g, b, indices) in duplicates {
                 let mut sorted_indices = indices.clone();
                 sorted_indices.sort();
