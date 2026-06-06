@@ -173,8 +173,19 @@ pub async fn random_image(
         }
     }
 
-    // If tags specified, join and filter; .distinct() prevents duplicate
-    // rows when an image matches multiple tags (images.colors is jsonb)
+    // If tags specified, join and filter. Without dedup, an image matching
+    // multiple tags appears multiple times, biasing random selection.
+    //
+    // NOTE: images.colors was originally PostgreSQL `json`, which lacks an
+    // equality operator, so `.distinct()` failed with:
+    //   "could not identify an equality operator for type json"
+    // Alternatives tried and rejected:
+    //   - GROUP BY: fails when authors table is also JOINed (all columns
+    //     must appear in GROUP BY)
+    //   - DISTINCT ON (PostgreSQL-only): requires leading ORDER BY columns
+    //     to match, conflicts with dynamic sort_by parameter
+    // Fix: m20260606_000002 converts colors to `jsonb`, which has full
+    // operator support (equality, indexing, containment).
     if let Some(tag_str) = tags {
         let tag_names: Vec<&str> = tag_str.split(',').collect();
         query = query
@@ -250,7 +261,17 @@ pub async fn list_images(
     }
 
     // tags filter (join-based; .distinct() prevents duplicate rows
-    // when an image matches multiple tags or the tags table has duplicate names)
+    // when an image matches multiple tags or the tags table has duplicate names.
+    //
+    // NOTE: images.colors was originally PostgreSQL `json`, which lacks an
+    // equality operator, so `.distinct()` failed with:
+    //   "could not identify an equality operator for type json"
+    // Alternatives tried and rejected:
+    //   - GROUP BY: fails when authors table is also JOINed (all columns
+    //     must appear in GROUP BY)
+    //   - DISTINCT ON (PostgreSQL-only): requires leading ORDER BY columns
+    //     to match, conflicts with dynamic sort_by parameter
+    // Fix: m20260606_000002 converts colors to `jsonb`, which supports =. )
     if let Some(tag_str) = tags {
         let tag_names: Vec<&str> = tag_str.split(',').collect();
         query = query
