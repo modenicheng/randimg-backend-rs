@@ -173,7 +173,9 @@ pub async fn random_image(
         }
     }
 
-    // If tags specified, join and filter
+    // If tags specified, join and filter; .distinct() ensures fair random
+    // selection by preventing images with multiple matching tags from
+    // appearing multiple times in the candidate pool
     if let Some(tag_str) = tags {
         let tag_names: Vec<&str> = tag_str.split(',').collect();
         query = query
@@ -189,7 +191,8 @@ pub async fn random_image(
                 tag::Column::Name
                     .is_in(tag_names.clone())
                     .or(tag::Column::TranslatedName.is_in(tag_names)),
-            );
+            )
+            .distinct();
     }
 
     // Use database-level random selection (RANDOM() works on both SQLite and PostgreSQL)
@@ -247,7 +250,8 @@ pub async fn list_images(
         }
     }
 
-    // tags filter (join-based)
+    // tags filter (join-based; .distinct() prevents duplicate rows
+    // when an image matches multiple tags or the tags table has duplicate names)
     if let Some(tag_str) = tags {
         let tag_names: Vec<&str> = tag_str.split(',').collect();
         query = query
@@ -263,7 +267,8 @@ pub async fn list_images(
                 tag::Column::Name
                     .is_in(tag_names.clone())
                     .or(tag::Column::TranslatedName.is_in(tag_names)),
-            );
+            )
+            .distinct();
     }
 
     // Popularity sort is handled at application level; others use DB ordering
