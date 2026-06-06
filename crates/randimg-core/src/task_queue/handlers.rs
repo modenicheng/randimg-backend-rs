@@ -74,6 +74,9 @@ pub async fn handle_crawl(job: CrawlJob, state: &Arc<WorkerState>) -> Result<(),
                 parent_job_id: Some(current_id.clone()),
                 task_id: Some(discover_task_id.clone()),
                 root_job_id: Some(current_id.clone()),
+                illust_type_filter: job.illust_type_filter.clone(),
+                exclude_r18: job.exclude_r18,
+                exclude_ai: job.exclude_ai,
                 max_retries: state.config.task_max_retries,
                 backoff_base: state.config.task_backoff_base,
             };
@@ -177,7 +180,14 @@ async fn crawl_user(
         .parse::<u64>()
         .map_err(|_| "invalid target_user_id")?;
 
-    let illust_type = job.illust_type.as_deref().unwrap_or("illust");
+    let illust_type: Option<&str> = job.illust_type_filter.as_ref()
+        .and_then(|f| {
+            if f.len() == 1 && matches!(f[0].as_str(), "illust" | "manga") {
+                Some(f[0].as_str())
+            } else {
+                None
+            }
+        });
     let max_pages = job.max_pages.unwrap_or(0);
 
     let mut offset = 0u32;
@@ -187,7 +197,7 @@ async fn crawl_user(
             "user_illusts",
             state.config.auth_max_retries,
             state.config.auth_backoff_base_ms,
-            || async { api.user_illusts(user_id, Some(illust_type), Some(offset)).await.map_err(|e| e.to_string()) },
+            || async { api.user_illusts(user_id, illust_type, Some(offset)).await.map_err(|e| e.to_string()) },
             || async { crate::pixiv::recover_auth(api, credential_id, &state.db).await.map_err(|e| e.to_string()) },
         ).await?;
 
@@ -1044,7 +1054,7 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
             }
             state.discover_cache.insert(illust_id.to_string(), std::time::Instant::now());
 
-            let downloads = save_illust(state, illust, None, None, None).await?;
+            let downloads = save_illust(state, illust, job.illust_type_filter.clone(), job.exclude_r18, job.exclude_ai).await?;
             for dl in downloads {
                 let download_task_id = uuid::Uuid::new_v4().to_string();
                 let download_job = DownloadJob {
@@ -1083,6 +1093,9 @@ pub async fn handle_discover(job: DiscoverJob, state: &Arc<WorkerState>) -> Resu
             parent_job_id: Some(current_id.clone()),
             task_id: Some(next_discover_task_id.clone()),
             root_job_id: job.root_job_id.clone(),
+            illust_type_filter: job.illust_type_filter.clone(),
+            exclude_r18: job.exclude_r18,
+            exclude_ai: job.exclude_ai,
             max_retries: state.config.task_max_retries,
             backoff_base: state.config.task_backoff_base,
         };

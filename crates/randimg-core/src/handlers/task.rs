@@ -13,7 +13,7 @@ use crate::auth::middleware::AuthUser;
 use crate::db::entities::task;
 use crate::db::entities::task_enum::{TaskStatus, TaskType};
 use crate::db::query;
-use crate::db::query::task_tree::ChildJobNode;
+use crate::db::query::task_tree::status_label;
 use crate::error::AppError;
 use uuid::Uuid;
 
@@ -228,19 +228,6 @@ pub struct ListTasksQuery {
 // Status mapping (task entity enum ↔ API lowercase)
 // ---------------------------------------------------------------------------
 
-/// Map task entity status enum to API status string.
-fn map_status(status: &TaskStatus) -> &'static str {
-    match status {
-        TaskStatus::Pending => "pending",
-        TaskStatus::Queued => "pending",
-        TaskStatus::Running => "running",
-        TaskStatus::Done => "completed",
-        TaskStatus::Failed => "failed",
-        TaskStatus::Killed => "killed",
-        TaskStatus::Dead => "dead",
-    }
-}
-
 /// Map API status filter to task entity status enum(s).
 fn unmap_status(status: &str) -> Vec<TaskStatus> {
     match status {
@@ -264,7 +251,7 @@ fn row_to_json(t: &task::Model) -> serde_json::Value {
     serde_json::json!({
         "id": t.id,
         "task_type": t.task_type.as_str(),
-        "status": map_status(&t.status),
+        "status": status_label(&t.status),
         "retry_count": t.retry_count,
         "created_at": created_at,
         "completed_at": completed_at,
@@ -598,60 +585,6 @@ fn map_status_str(status: &str) -> &'static str {
 
 // ── GET /tasks/{id}/tree ────────────────────────────────────────────────────
 
-/// GET /tasks/{id}/tree — Nested tree rooted at the given task ID.
-///
-/// Returns the full recursive hierarchy of subtasks. Each node contains the
-/// job details and a `children` array of its own subtasks. Useful for
-/// visualizing the entire crawl→download→extract pipeline of a single crawl job.
-///
-/// # Response (200)
-///
-/// ```json
-/// {
-///   "root_job_id": "01HZ...",
-///   "children": [
-///     {
-///       "job": { "id": "...", "task_type": "download", "status": "completed", ... },
-///       "children": [
-///         { "job": { "id": "...", "task_type": "color_extract", ... }, "children": [] }
-///       ]
-///     }
-///   ]
-/// }
-/// ```
-///
-/// Recursively flattens a `ChildJobNode` tree into a flat `Vec<JsonValue>`.
-///
-/// For each node, this function:
-/// 1. Clones the job data
-/// 2. Injects `parent_job_id` and `root_job_id` fields
-/// 3. Pushes to the result vector
-/// 4. Recursively processes children (depth-first, pre-order traversal)
-///
-/// The root node itself is NOT included — only its descendants. This matches
-/// the nested mode behavior where the root is the URL parameter, not a child.
-///
-/// # Arguments
-/// - `nodes`: The child nodes to flatten (output of `list_children`)
-/// - `parent_id`: The job ID of the parent for the current level
-/// - `root_id`: The root job ID (constant throughout recursion, from URL path)
-fn flatten_tree(nodes: &[ChildJobNode], parent_id: &str, root_id: &str) -> Vec<serde_json::Value> {
-    let mut result = Vec::new();
-    for node in nodes {
-        let mut job = node.job.clone();
-        if let serde_json::Value::Object(ref mut map) = job {
-            map.insert("parent_job_id".to_string(), serde_json::Value::String(parent_id.to_string()));
-            map.insert("root_job_id".to_string(), serde_json::Value::String(root_id.to_string()));
-        }
-        result.push(job);
-        let node_id = node.job.get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        result.extend(flatten_tree(&node.children, node_id, root_id));
-    }
-    result
-}
-
 #[derive(Debug, Deserialize)]
 pub struct TaskTreeQuery {
     pub task_type: Option<String>,
@@ -726,36 +659,39 @@ pub async fn get_task_tree(
         _           => vec![TaskStatus::Pending, TaskStatus::Queued],
     });
 
-    let tree = query::task_tree::list_children(
-        &state.db,
-        &task_id,
-        parsed_type.as_ref(),
-        mapped_status.as_deref(),
-        q.crawl_type,
-        20,
-    )
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
-
     if q.flatten.unwrap_or(false) {
-        // FLATTENED MODE: Return all descendants as a flat array.
-        // Each item has parent_job_id and root_job_id for hierarchy reconstruction.
-        // Response shape: { "root_job_id": "...", "tasks": [...], "total": N }
-        //
-        // This differs from the default nested mode which returns:
-        // { "root_job_id": "...", "children": [{ job, children }] }
-        //
-        // The different shapes are intentional — NOT a bug. See function doc.
-        let all_tasks = flatten_tree(&tree, &task_id, &task_id);
-        let total = all_tasks.len() as u64;
+        // FLATTENED MODE: Single recursive CTE query, all filtering + pagination in SQL.
+        let (rows, total) = query::task_tree::list_descendants_flat(
+            &state.db,
+            &task_id,
+            parsed_type.as_ref(),
+            mapped_status.as_deref(),
+            q.crawl_type,
+            q.limit,
+            q.offset,
+        )
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        let offset = q.offset.unwrap_or(0) as usize;
-        let limit = q.limit.unwrap_or(total) as usize;
-        let tasks: Vec<_> = all_tasks
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect();
+        let tasks: Vec<serde_json::Value> = rows.into_iter().map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "task_type": r.task_type,
+                "status": r.status,
+                "parent_job_id": r.parent_id,
+                "root_job_id": task_id,
+                "crawler_id": r.crawler_id,
+                "image_id": r.image_id,
+                "retry_count": r.retry_count,
+                "progress": r.progress,
+                "priority": r.priority,
+                "created_at": r.created_at,
+                "updated_at": r.updated_at,
+                "completed_at": r.completed_at,
+                "error_message": r.error_message,
+                "params": r.params,
+            })
+        }).collect();
 
         Ok(Json(serde_json::json!({
             "root_job_id": task_id,
@@ -763,8 +699,18 @@ pub async fn get_task_tree(
             "total": total,
         })))
     } else {
-        // NESTED MODE: Return tree structure with children arrays.
-        // Each node has { job: {...}, children: [...] } recursively.
+        // NESTED MODE: Recursive tree with children arrays.
+        let tree = query::task_tree::list_children(
+            &state.db,
+            &task_id,
+            parsed_type.as_ref(),
+            mapped_status.as_deref(),
+            q.crawl_type,
+            20,
+        )
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
         Ok(Json(serde_json::json!({
             "root_job_id": task_id,
             "children": tree,

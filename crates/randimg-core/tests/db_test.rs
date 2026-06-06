@@ -4,6 +4,7 @@
 use migration::MigratorTrait;
 use sea_orm::{Database, DatabaseConnection};
 use randimg_core::db::entities::task_enum::TaskType;
+use serde_json::json;
 
 /// Create an in-memory SQLite connection and run all migrations.
 async fn setup_db() -> DatabaseConnection {
@@ -885,7 +886,7 @@ async fn test_soft_deleted_image_excluded_from_list() {
 async fn test_task_increment_retry_from_zero() {
     let db = setup_db().await;
     let task = randimg_core::db::query::task::create(
-        &db, TaskType::Crawl, None, None, None, None, Some("{}"),
+        &db, TaskType::Crawl, None, None, None, None, Some(json!({})),
     )
     .await
     .unwrap();
@@ -906,7 +907,7 @@ async fn test_task_increment_retry_from_zero() {
 async fn test_task_increment_retry_idempotent() {
     let db = setup_db().await;
     let task = randimg_core::db::query::task::create(
-        &db, TaskType::Crawl, None, None, None, None, Some("{}"),
+        &db, TaskType::Crawl, None, None, None, None, Some(json!({})),
     )
     .await
     .unwrap();

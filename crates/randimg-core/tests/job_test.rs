@@ -13,7 +13,6 @@ fn test_crawl_job_roundtrip() {
         target_end_date: None,
         target_search_prompt: Some("landscape".into()),
         ranking_mode: None,
-        illust_type: None,
         max_pages: None,
         discover_hops: None,
         discover_seed_limit: None,
@@ -35,7 +34,6 @@ fn test_crawl_job_roundtrip() {
     assert_eq!(deserialized.target_user_id.as_deref(), Some("12345"));
     assert_eq!(deserialized.target_search_prompt.as_deref(), Some("landscape"));
     assert!(deserialized.ranking_mode.is_none());
-    assert!(deserialized.illust_type.is_none());
     assert!(deserialized.max_pages.is_none());
     assert!(deserialized.discover_hops.is_none());
     assert!(deserialized.discover_seed_limit.is_none());
@@ -124,6 +122,9 @@ fn test_discover_job_roundtrip() {
         parent_job_id: Some("parent-uuid-123".into()),
         task_id: None,
         root_job_id: None,
+        illust_type_filter: None,
+        exclude_r18: None,
+        exclude_ai: None,
         max_retries: 3,
         backoff_base: 2,
     };
@@ -147,6 +148,9 @@ fn test_discover_job_optional_fields_none() {
         parent_job_id: None,
         task_id: None,
         root_job_id: None,
+        illust_type_filter: None,
+        exclude_r18: None,
+        exclude_ai: None,
         max_retries: 3,
         backoff_base: 2,
     };
@@ -233,7 +237,6 @@ fn test_parent_job_id_roundtrip() {
         target_end_date: None,
         target_search_prompt: None,
         ranking_mode: None,
-        illust_type: None,
         max_pages: None,
         discover_hops: None,
         discover_seed_limit: None,

@@ -18,7 +18,7 @@ async fn test_dead_letter_insert_and_list() {
     let db = setup_db().await;
 
     let task = randimg_core::db::query::task::create(
-        &db, TaskType::Crawl, None, None, None, None, Some(r#"{"target":"test"}"#),
+        &db, TaskType::Crawl, None, None, None, None, Some(json!({"target": "test"})),
     )
     .await
     .unwrap();
@@ -32,7 +32,7 @@ async fn test_dead_letter_insert_and_list() {
         &db,
         &task.id,
         "crawl",
-        Some(r#"{"target":"test"}"#),
+        Some(json!({"target": "test"})),
         "connection reset",
         3,
         Some(history),
@@ -83,7 +83,7 @@ async fn test_dead_letter_requeue() {
     let db = setup_db().await;
 
     let task = randimg_core::db::query::task::create(
-        &db, TaskType::Download, None, None, None, None, Some(r#"{"image_id":42}"#),
+        &db, TaskType::Download, None, None, None, None, Some(json!({"image_id": 42})),
     )
     .await
     .unwrap();
@@ -92,7 +92,7 @@ async fn test_dead_letter_requeue() {
         &db,
         &task.id,
         "download",
-        Some(r#"{"image_id":42}"#),
+        Some(json!({"image_id": 42})),
         "permanent failure",
         3,
         None,
@@ -105,7 +105,7 @@ async fn test_dead_letter_requeue() {
         .unwrap();
 
     assert_eq!(new_task.task_type, TaskType::Download);
-    assert_eq!(new_task.params.as_deref(), Some(r#"{"image_id":42}"#));
+    assert_eq!(new_task.params, Some(json!({"image_id": 42})));
     assert_eq!(new_task.retry_count, 0);
     assert_eq!(new_task.status, TaskStatus::Pending);
     assert_ne!(new_task.id, task.id);

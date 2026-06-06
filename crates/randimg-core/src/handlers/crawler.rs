@@ -35,10 +35,10 @@ pub struct CreateCrawlerRequest {
     pub target_search_prompt: Option<String>,
     /// Ranking mode (crawl_type=0): "day", "week", "month", "original", "rookie". Default: "day".
     pub ranking_mode: Option<String>,
-    /// User illust type (crawl_type=1): "illust", "manga". Default: "illust".
-    pub illust_type: Option<String>,
-    /// Filter by illust type: list of types to include (e.g., ["illust", "manga"]).
-    /// If None or empty, all types are included. Default: None (no filter).
+    /// Filter by illust type: list of types to include (e.g., ["illust"]).
+    /// If None or empty, all types are included.
+    /// A single-element list (e.g. ["illust"]) is also passed to Pixiv API as an
+    /// optimisation; multi-element or None relies solely on local filtering.
     pub illust_type_filter: Option<Vec<String>>,
     /// Exclude R18 content (x_restrict > 0). Default: false.
     pub exclude_r18: Option<bool>,
@@ -112,7 +112,6 @@ pub async fn create_crawler(
         target_end_date: body.target_end_date.map(|d| d.to_string()),
         target_search_prompt: body.target_search_prompt,
         ranking_mode: body.ranking_mode,
-        illust_type: body.illust_type,
         illust_type_filter: body.illust_type_filter,
         exclude_r18: body.exclude_r18,
         exclude_ai: body.exclude_ai,
@@ -258,6 +257,9 @@ pub async fn trigger_discover(
         parent_job_id: None,
         task_id: Some(task_id.clone()),
         root_job_id: None,
+        illust_type_filter: None,
+        exclude_r18: None,
+        exclude_ai: None,
         max_retries: state.config.task_max_retries,
         backoff_base: state.config.task_backoff_base,
     };

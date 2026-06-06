@@ -218,10 +218,7 @@ pub struct CrawlJob {
     /// Ranking mode: "day", "week", "month", "original", "rookie", "daily_r18", "weekly_r18" (default: "day").
     #[serde(default)]
     pub ranking_mode: Option<String>,
-    /// User illust type: "illust", "manga" (default: "illust").
-    #[serde(default)]
-    pub illust_type: Option<String>,
-    /// Filter by illust type: list of types to include (e.g., ["illust", "manga"]).
+    /// Filter by illust type: list of types to include (e.g., ["illust"]).
     /// If None or empty, all types are included. Default: None (no filter).
     #[serde(default)]
     pub illust_type_filter: Option<Vec<String>>,
@@ -368,6 +365,16 @@ pub struct DiscoverJob {
     /// Used to maintain flat tree hierarchy for API pagination.
     #[serde(default)]
     pub root_job_id: Option<String>,
+    /// Filter by illust type: list of types to include (e.g., ["illust", "manga"]).
+    /// If None or empty, all types are included. Inherited from the parent CrawlJob.
+    #[serde(default)]
+    pub illust_type_filter: Option<Vec<String>>,
+    /// Exclude R18 content (x_restrict > 0). Inherited from the parent CrawlJob.
+    #[serde(default)]
+    pub exclude_r18: Option<bool>,
+    /// Exclude AI-generated content (illust_ai_type > 0). Inherited from the parent CrawlJob.
+    #[serde(default)]
+    pub exclude_ai: Option<bool>,
     /// Maximum retry attempts (0 = no retry). Populated from AppConfig.
     #[serde(default = "default_max_retries")]
     pub max_retries: i32,
