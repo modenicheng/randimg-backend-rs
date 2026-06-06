@@ -6,123 +6,13 @@
 
 #![cfg(feature = "http")]
 
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use axum::response::Response;
-use http_body_util::BodyExt;
-use migration::MigratorTrait;
-use sea_orm::{Database, DatabaseConnection};
-use serde_json::Value;
-use std::sync::Arc;
 use tower::ServiceExt;
 
-use randimg_core::config::{AppConfig, BindAddr};
-use randimg_core::db_backend;
-
-fn make_test_config() -> AppConfig {
-    AppConfig {
-        api_database_url: "postgres://localhost/test_db".into(),
-        queue_database_url: "postgres://localhost/test_queue".into(),
-        secret_key: "test-secret-key-for-jwt".into(),
-        jwt_expire_minutes: 60,
-        cdn_base_url: "https://cdn.test/".into(),
-        image_dir: "/tmp/test_images".into(),
-        server_addr: BindAddr::parse("127.0.0.1:8080"),
-        pixiv_refresh_token: "".into(),
-        pixiv_proxy: "".into(),
-        pixiv_accept_lang: "en".into(),
-        pixiv_timeout_secs: 30,
-        log_level: "info".into(),
-        log_dir: "/tmp/logs".into(),
-        log_json: false,
-        max_discover_hops: 3,
-        discover_seed_limit: 5,
-        dogecloud_access_key: "".into(),
-        dogecloud_secret_key: "".into(),
-        dogecloud_s3_bucket: "".into(),
-        dogecloud_s3_endpoint: "".into(),
-        cors_origins: "".into(),
-        color_worker_rayon_threads: 2,
-        color_worker_standalone: false,
-        color_extract_k: 10,
-        color_extract_max_iter: 50,
-        color_extract_batch_size: 2048,
-        color_extract_image_scale: 0.5,
-        auth_max_retries: 3,
-        auth_backoff_base_ms: 500,
-        task_max_retries: 3,
-        task_backoff_base: 2,
-        task_poll_interval_ms: 500,
-        task_default_timeout_secs: 300,
-        task_dedup_ttl_secs: 300,
-        task_cleanup_ttl_hours: 168,
-        dead_letter_ttl_hours: 720,
-        drain_timeout_secs: 30,
-        worker_health_port: 8001,
-        watchdog_check_interval_secs: 30,
-        watchdog_stuck_timeout_secs: 120,
-        task_concurrency_crawl: 2,
-        task_concurrency_download: 4,
-        task_concurrency_color_extract: 2,
-        task_concurrency_upload: 2,
-        task_concurrency_accessibility_check: 2,
-        task_concurrency_discover: 1,
-        task_concurrency_refresh_pixiv_token: 1,
-        task_concurrency_cleanup: 1,
-    }
-}
-
-async fn setup_db() -> DatabaseConnection {
-    let db = Database::connect("sqlite::memory:")
-        .await
-        .expect("Failed to connect to in-memory SQLite");
-    migration::Migrator::up(&db, None)
-        .await
-        .expect("Failed to run migrations");
-    db
-}
-
-/// Build a router with a subset of handlers for testing.
-async fn build_test_router(db: DatabaseConnection, config: AppConfig) -> axum::Router {
-    use randimg_core::handlers::{auth, author, health, image, statistic, tag};
-
-    let queue_backend = db_backend::init(&config)
-        .await
-        .expect("Failed to init queue backend — is PostgreSQL running?");
-
-    let state = Arc::new(randimg_core::WorkerState {
-        db,
-        config,
-        oss: randimg_core::dogecloud::DogeCloudOss::new_noop(),
-        queue_backend: queue_backend.clone(),
-        http_client: reqwest::Client::new(),
-        shutdown_token: tokio_util::sync::CancellationToken::new(),
-        worker_start_time: std::time::Instant::now(),
-        active_tasks: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        discover_cache: std::sync::Arc::new(dashmap::DashMap::new()),
-        fingerprint_cache: queue_backend.fingerprint_cache.clone(),
-        last_activity: std::sync::Arc::new(dashmap::DashMap::new()),
-        stuck_pools: std::sync::Arc::new(dashmap::DashMap::new()),
-    });
-
-    axum::Router::new()
-        .merge(health::routes())
-        .merge(auth::routes())
-        .merge(tag::routes())
-        .merge(author::routes())
-        .merge(statistic::routes())
-        .merge(image::routes())
-        .with_state(state)
-}
-
-async fn response_json(resp: Response) -> (StatusCode, Value) {
-    let status = resp.status();
-    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let json: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(
-        |_| serde_json::json!({"_raw": String::from_utf8_lossy(&body_bytes).to_string()}),
-    );
-    (status, json)
-}
+use common::{build_test_router, make_test_config, response_json, setup_db};
 
 // ── Health Endpoint ──────────────────────────────────────────────────────────
 

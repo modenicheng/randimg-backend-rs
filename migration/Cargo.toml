@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 default = ["postgres"]
 postgres = ["sea-orm-migration/sqlx-postgres"]
+sqlite = ["sea-orm-migration/sqlx-sqlite"]
 
 [dependencies]
 sea-orm-migration = { version = "1", features = [

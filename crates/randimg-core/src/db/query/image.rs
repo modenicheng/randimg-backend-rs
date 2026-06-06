@@ -222,15 +222,18 @@ pub async fn random_image(
             .distinct();
     }
 
-    // Color filter: primary mode bounding box pre-filter
+    // Color filter: primary mode — exact Euclidean distance at SQL level.
     if let Some(ref cp) = color_params {
         if cp.mode == "primary" {
-            let radius = cp.max_dist.sqrt();
+            let dist_sql = format!(
+                "POWER((primary_l - {}::double precision), 2) + \
+                 POWER((COALESCE(primary_a, 0) - {}::double precision), 2) + \
+                 POWER((COALESCE(primary_b, 0) - {}::double precision), 2)",
+                cp.lab[0], cp.lab[1], cp.lab[2]
+            );
             query = query
                 .filter(image::Column::PrimaryL.is_not_null())
-                .filter(image::Column::PrimaryL.between(cp.lab[0] - radius, cp.lab[0] + radius))
-                .filter(image::Column::PrimaryA.between(cp.lab[1] - radius, cp.lab[1] + radius))
-                .filter(image::Column::PrimaryB.between(cp.lab[2] - radius, cp.lab[2] + radius));
+                .filter(Expr::cust(format!("({}) <= {}", dist_sql, cp.max_dist)));
         }
     }
 
@@ -406,23 +409,54 @@ pub async fn list_images(
             .distinct();
     }
 
-    // Color filter: primary mode bounding box pre-filter
+    // Color filter: primary mode — exact Euclidean distance at SQL level.
+    // Lab(a, b) can be NULL in the schema, so COALESCE to 0.
     if let Some(ref cp) = color_params {
         if cp.mode == "primary" {
-            let radius = cp.max_dist.sqrt();
+            let dist_sql = format!(
+                "POWER((primary_l - {}::double precision), 2) + \
+                 POWER((COALESCE(primary_a, 0) - {}::double precision), 2) + \
+                 POWER((COALESCE(primary_b, 0) - {}::double precision), 2)",
+                cp.lab[0], cp.lab[1], cp.lab[2]
+            );
             query = query
                 .filter(image::Column::PrimaryL.is_not_null())
-                .filter(image::Column::PrimaryL.between(cp.lab[0] - radius, cp.lab[0] + radius))
-                .filter(image::Column::PrimaryA.between(cp.lab[1] - radius, cp.lab[1] + radius))
-                .filter(image::Column::PrimaryB.between(cp.lab[2] - radius, cp.lab[2] + radius));
+                .filter(Expr::cust(format!("({}) <= {}", dist_sql, cp.max_dist)));
         }
     }
 
-    // Popularity sort is handled at application level; distance sort too
+    // Determine color mode for routing decision
+    let is_primary_color = color_params
+        .as_ref()
+        .map(|cp| cp.mode == "primary")
+        .unwrap_or(false);
+    let is_palette_color = color_params
+        .as_ref()
+        .map(|cp| cp.mode == "palette")
+        .unwrap_or(false);
+
+    // Popularity sort is handled at Rust level.
+    // Distance sort: primary mode at SQL level, palette mode at Rust level.
     let is_popularity = sort_by == "popularity";
     let is_distance_sort = sort_by == "distance" && color_params.is_some();
 
-    if !is_popularity && !is_distance_sort {
+    if is_primary_color && is_distance_sort {
+        // Primary mode + distance sort: ORDER BY distance expression at SQL level.
+        // desc=true → closest first (ASC), desc=false → farthest first (DESC).
+        let cp = color_params.as_ref().unwrap();
+        let dist_sql = format!(
+            "POWER((primary_l - {}::double precision), 2) + \
+             POWER((COALESCE(primary_a, 0) - {}::double precision), 2) + \
+             POWER((COALESCE(primary_b, 0) - {}::double precision), 2)",
+            cp.lab[0], cp.lab[1], cp.lab[2]
+        );
+        if desc {
+            query = query.order_by(Expr::cust(dist_sql), Order::Asc);
+        } else {
+            query = query.order_by(Expr::cust(dist_sql), Order::Desc);
+        }
+        query = query.offset(offset).limit(limit);
+    } else if !is_popularity && !is_distance_sort {
         let sort_column = match sort_by {
             "width" => image::Column::Width,
             "height" => image::Column::Height,
@@ -436,32 +470,45 @@ pub async fn list_images(
         } else {
             query = query.order_by_asc(sort_column);
         }
-        query = query.offset(offset).limit(limit);
+        // Palette mode needs post-filter → defer pagination to Rust.
+        // Primary mode already filtered by exact SQL distance → safe to paginate here.
+        if !is_palette_color {
+            query = query.offset(offset).limit(limit);
+        }
     }
 
-    let results = query.all(db).await?;
+    let sql_results = query.all(db).await?;
 
-    // Color post-filter + distance computation
-    let results: Vec<_> = if let Some(ref cp) = color_params {
-        if cp.mode == "primary" {
-            // Primary mode: filter by exact distance, attach distance score
-            results
+    let results: Vec<(image::Model, Option<author::Model>)> = if is_primary_color {
+        if is_popularity {
+            // Primary mode: SQL handled exact-distance filter; Rust handles popularity sort + pagination.
+            let mut scored: Vec<(f64, (image::Model, Option<author::Model>))> = sql_results
                 .into_iter()
-                .filter_map(|(img, auth)| {
-                    let l = img.primary_l?;
-                    let a = img.primary_a.unwrap_or(0.0);
-                    let b = img.primary_b.unwrap_or(0.0);
-                    let dist = lab_sq_dist(l, a, b, cp.lab[0], cp.lab[1], cp.lab[2]);
-                    if dist <= cp.max_dist {
-                        Some(((img, auth), dist))
-                    } else {
-                        None
-                    }
+                .map(|pair| {
+                    let score = popularity_score(&pair.0);
+                    (score, pair)
                 })
+                .collect();
+
+            if desc {
+                scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            } else {
+                scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            }
+            scored
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .map(|(_, pair)| pair)
                 .collect()
         } else {
-            // Palette mode: match via image_color_palette table
-            let candidate_ids: Vec<i32> = results.iter().map(|(img, _)| img.id).collect();
+            // Primary mode: SQL already handled exact-distance filter, sort, and pagination.
+            sql_results
+        }
+    } else if let Some(ref cp) = color_params {
+        // Palette mode: Rust post-filter via image_color_palette table
+        let results: Vec<_> = {
+            let candidate_ids: Vec<i32> = sql_results.iter().map(|(img, _)| img.id).collect();
 
             if candidate_ids.is_empty() {
                 Vec::new()
@@ -498,36 +545,65 @@ pub async fn list_images(
                     }
                 }
 
-                results
+                sql_results
                     .into_iter()
                     .filter_map(|(img, auth)| {
                         best_by_image.get(&img.id).map(|&dist| ((img, auth), dist))
                     })
                     .collect()
             }
-        }
-    } else {
-        // No color filter — no distance score
-        results.into_iter().map(|r| (r, 0.0f64)).collect()
-    };
+        };
 
-    // For popularity / distance sort: compute scores, sort, paginate
-    let results: Vec<_> = if is_popularity || is_distance_sort {
+        // Sort + paginate for palette mode
+        if is_popularity || is_distance_sort {
+            let mut scored: Vec<(f64, (image::Model, Option<author::Model>))> = results
+                .into_iter()
+                .map(|((img, auth), color_dist)| {
+                    let score = if is_popularity {
+                        popularity_score(&img)
+                    } else {
+                        -color_dist
+                    };
+                    (score, (img, auth))
+                })
+                .collect();
+
+            if desc {
+                scored
+                    .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            } else {
+                scored
+                    .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            }
+            scored
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .map(|(_, pair)| pair)
+                .collect()
+        } else {
+            results
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .map(|((img, auth), _)| (img, auth))
+                .collect()
+        }
+    } else if is_popularity {
+        // No color filter + popularity sort
+        let results: Vec<_> = sql_results
+            .into_iter()
+            .map(|r| (r, 0.0f64))
+            .collect();
+
         let mut scored: Vec<(f64, (image::Model, Option<author::Model>))> = results
             .into_iter()
-            .map(|((img, auth), color_dist)| {
-                let score = if is_popularity {
-                    popularity_score(&img)
-                } else {
-                    // Distance sort: lower is better, so negate for descending
-                    -color_dist
-                };
+            .map(|((img, auth), _)| {
+                let score = popularity_score(&img);
                 (score, (img, auth))
             })
             .collect();
 
-        // Both popularity and distance: higher score = better
-        // For distance, score is negated, so descending = closest first
         if desc {
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         } else {
@@ -540,13 +616,8 @@ pub async fn list_images(
             .map(|(_, pair)| pair)
             .collect()
     } else {
-        // Color-filtered but not distance-sorted: drop the distance score
-        results
-            .into_iter()
-            .skip(offset as usize)
-            .take(limit as usize)
-            .map(|((img, auth), _)| (img, auth))
-            .collect()
+        // No color filter, no popularity — SQL already sorted and paginated
+        sql_results
     };
 
     // Batch fetch tags for all images (avoid N+1)
